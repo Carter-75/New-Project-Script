@@ -364,14 +364,16 @@ bootstrapApplication(App, appConfig)
   .catch((err) => console.error(err));
 """
 
-    fe_app_config_ts = """import { ApplicationConfig, provideZoneChangeDetection } from '@angular/core';
+    fe_app_config_ts = """import { ApplicationConfig, provideZonelessChangeDetection } from '@angular/core';
 import { provideRouter } from '@angular/router';
+import { provideHttpClient } from '@angular/common/http';
 import { routes } from './app.routes';
 
 export const appConfig: ApplicationConfig = {
   providers: [
-    provideZoneChangeDetection({ eventCoalescing: true }),
-    provideRouter(routes)
+    provideZonelessChangeDetection(),
+    provideRouter(routes),
+    provideHttpClient()
   ]
 };
 """
