@@ -392,7 +392,7 @@ export const appConfig: ApplicationConfig = {
             "importHelpers": True,
             "target": "ES2022",
             "module": "preserve",
-            "moduleResolution": "node",
+            "moduleResolution": "bundler",
             "sourceMap": True
         },
         "angularCompilerOptions": {
@@ -474,14 +474,15 @@ npm start
 ```
 """
 
-    # Physics logic in the app component if features enabled
-    physics_imports = ""
+    # Component imports and logic
+    imports_list = ["Component", "signal"]
     if use_matter or use_anime or use_confetti:
-        imports_list = ["viewChild", "ElementRef", "afterRender", "OnDestroy"]
-        physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\n"
-        if use_matter: physics_imports += "import * as Matter from 'matter-js';\n"
-        if use_anime: physics_imports += "import anime from 'animejs';\n"
-        if use_confetti: physics_imports += "import confetti from 'canvas-confetti';\n"
+        imports_list.extend(["viewChild", "ElementRef", "afterNextRender", "OnDestroy"])
+    
+    physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\n"
+    if use_matter: physics_imports += "import * as Matter from 'matter-js';\n"
+    if use_anime: physics_imports += "import anime from 'animejs';\n"
+    if use_confetti: physics_imports += "import confetti from 'canvas-confetti';\n"
 
     physics_variables = ""
     if use_matter:
@@ -491,12 +492,14 @@ npm start
     if use_matter: physics_init_calls += "      this.initPhysics();\n"
     if use_anime: physics_init_calls += "      this.initAnimation();\n"
 
-    physics_logic = f"""
+    physics_logic = ""
+    if use_matter or use_anime or use_confetti:
+        physics_logic += f"""
   private container = viewChild<ElementRef<HTMLDivElement>>('scene');
   private card = viewChild<ElementRef<HTMLDivElement>>('card');
 {physics_variables}
   constructor() {{
-    afterRender(() => {{
+    afterNextRender(() => {{
 {physics_init_calls}
       if ({'true' if use_matter else 'false'}) window.addEventListener('resize', this.handleResize);
     }});
@@ -504,26 +507,26 @@ npm start
 
   ngOnDestroy() {{
     if ({'true' if use_matter else 'false'}) window.removeEventListener('resize', this.handleResize);
-    if (this.render) {{
-      Matter.Render.stop(this.render);
-      if (this.render.canvas.parentNode) {{
-        this.render.canvas.parentNode.removeChild(this.render.canvas);
-      }}
-    }}
-    if (this.engine) Matter.Engine.clear(this.engine);
+    {"if (this.render) { Matter.Render.stop(this.render); if (this.render.canvas.parentNode) { this.render.canvas.parentNode.removeChild(this.render.canvas); } }" if use_matter else ""}
+    {"if (this.engine) Matter.Engine.clear(this.engine);" if use_matter else ""}
   }}
 
   private handleResize = () => {{
     const el = this.container()?.nativeElement;
-    if (el && this.render) {{
-      this.render.canvas.width = el.clientWidth;
-      this.render.options.width = el.clientWidth;
+    if (el && {'this.render' if use_matter else 'false'}) {{
+      {( 'this.render.canvas.width = el.clientWidth; this.render.options.width = el.clientWidth;' if use_matter else '')}
     }}
   }};
 
   protected celebrate() {{
     { 'confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });' if use_confetti else "console.log('Confetti is disabled');" }
   }}
+"""
+    else:
+        physics_logic = """
+  protected celebrate() {
+    console.log('Confetti is disabled');
+  }
 """
     if use_anime:
         physics_logic += """
@@ -577,9 +580,9 @@ npm start
   }
 """
 
-    fe_app_ts = f"""import {{ Component, signal }} from '@angular/core';
+    fe_app_ts = f"""{physics_imports}
 import {{ RouterOutlet }} from '@angular/router';
-{physics_imports}
+
 
 @Component({{
   selector: 'app-root',
