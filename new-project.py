@@ -61,6 +61,7 @@ def main():
         "Project Name", 
         validation_func=lambda x: x.replace("-", "").replace("_", "").isalnum()
     )
+    project_slug = project_name.lower()
     
     fe_port = ask_input(
         "Frontend Port", 
@@ -809,7 +810,7 @@ export class App implements OnInit {{
             "cleanUrls": True,
             "trailingSlash": False,
             "rewrites": [
-                { "source": "/api/:path*", "destination": f"https://{project_name}-backend.vercel.app/api/:path*" },
+                { "source": "/api/:path*", "destination": f"https://{project_slug}-backend.vercel.app/api/:path*" },
                 { "source": "/(.*)", "destination": "/index.html" }
             ]
         }
@@ -964,7 +965,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
         try:
             # 1. Link Project (Uses npx to avoid global requirement/admin issues)
             print("Linking to Vercel...")
-            subprocess.run(["npx", "vercel", "link", "--yes"], cwd=project_root, shell=True, check=True)
+            subprocess.run(["npx", "vercel", "link", "--yes", "--project", project_slug], cwd=project_root, shell=True, check=True)
             
             # 3. Sync .env.local to Vault
             if (project_root / ".env.local").exists():
@@ -976,9 +977,8 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                             key, val = line.split("=", 1)
                             if key and val:
                                 subprocess.run([
-                                    "npx", "vercel", "env", "add", 
                                     key.strip(), "production", val.strip(),
-                                    "--non-interactive", "--yes"
+                                    "--non-interactive", "--yes", "--project", project_slug
                                 ], cwd=project_root, shell=True)
                 print("Vercel Vault synced successfully.")
 
@@ -1018,7 +1018,7 @@ def sync_vercel_env():
                 
                 if key and val:
                     result = subprocess.run(
-                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes"],
+                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes", "--project", project_slug],
                         shell=True,
                         capture_output=True,
                         text=True
