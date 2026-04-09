@@ -57,19 +57,10 @@ def main():
     print("      Features: Physics (Matter.js), Anime.js, Iframe Security\n")
 
     # 1. Gather Inputs
-    raw_name = ask_input(
+    project_name = ask_input(
         "Project Name", 
-        validation_func=lambda x: x == "." or x.replace("-", "").replace("_", "").isalnum()
+        validation_func=lambda x: x.replace("-", "").replace("_", "").isalnum()
     )
-    if raw_name == ".":
-        project_root = Path.cwd()
-        project_name = project_root.name
-        is_in_place = True
-    else:
-        project_name = raw_name
-        project_root = Path.cwd() / project_name
-        is_in_place = False
-    
     project_slug = project_name.lower()
     
     fe_port = ask_input(
@@ -126,36 +117,18 @@ def main():
         options=["vercel", "other"]
     )
     
-    if is_in_place:
-        backend_root = project_root / f"{project_name}-backend"
-        frontend_root = project_root / f"{project_name}-frontend"
-        env_file_name = f"{project_name}-.env.local"
-        delete_script_name = f"delete-{project_name}.py"
-        ai_file_name = f"{project_name}-AGENTS.md" if ai_choice == "Agents.md" else f"{project_name}-.cursorrules" if ai_choice == "Cursor" else ".claudecode"
-    else:
-        backend_root = project_root / "backend"
-        frontend_root = project_root / "frontend"
-        env_file_name = ".env.local"
-        delete_script_name = "delete-project.py"
-        ai_file_name = "AGENTS.md" if ai_choice == "Agents.md" else ".cursorrules" if ai_choice == "Cursor" else ".claudecode"
+    project_root = Path.cwd() / project_name
+    if project_root.exists():
+        print(f"Error: Directory {project_name} already exists.")
+        return
 
-    if is_in_place:
-        if backend_root.exists() or frontend_root.exists():
-            print(f"Error: {backend_root.name} or {frontend_root.name} already exists. Collision detected.")
-            return
+    project_root.mkdir()
+    backend_root = project_root / "backend"
+    frontend_root = project_root / "frontend"
+    backend_root.mkdir()
+    frontend_root.mkdir()
 
-    backend_root.mkdir(exist_ok=True)
-    frontend_root.mkdir(exist_ok=True)
-
-    print(f"\nCreating project '{project_name}' {'in-place' if is_in_place else 'in ' + str(project_root)}...")
-
-
-    # Items to track for deletion
-    created_items = ["backend", "frontend", ".env.local", ".gitignore", "README.md", "sync-env.py", "delete-project.py"]
-    if ai_choice == "Agents.md": created_items.append("AGENTS.md")
-    elif ai_choice == "Cursor": created_items.append(".cursorrules")
-    elif ai_choice == "Claude": created_items.append(".claudecode")
-
+    print(f"\nCreating project '{project_name}' in {project_root}...")
 
     # --- Backend Templates ---
     be_package_json = {
@@ -186,12 +159,12 @@ def main():
     be_app_js = """// Explicit Environment Resolution
 const path = require('path');
 const fs = require('fs');
-const resolveEnvPath = () => {{
-  const candidates = [path.join(process.cwd(), '{env_file_name}'), path.join(process.cwd(), 'backend', '{env_file_name}')];
-  for (const c of candidates) {{ if (fs.existsSync(c)) return c; }}
+const resolveEnvPath = () => {
+  const candidates = [path.join(process.cwd(), '.env.local'), path.join(process.cwd(), 'backend', '.env.local')];
+  for (const c of candidates) { if (fs.existsSync(c)) return c; }
   return candidates[0];
-}};
-require('dotenv').config({{ path: resolveEnvPath() }});
+};
+require('dotenv').config({ path: resolveEnvPath() });
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
@@ -314,8 +287,8 @@ app.use((err, req, res, next) => {
 module.exports = app;
 """
 
-    be_www = f"""#!/usr/bin/env node
-require('dotenv').config({{ path: require('path').join(__dirname, '../../{env_file_name}') }});
+    be_www = """#!/usr/bin/env node
+require('dotenv').config({ path: require('path').join(__dirname, '../../.env.local') });
 const app = require('../app');
 const http = require('http');
 
@@ -931,7 +904,7 @@ PRODUCTION=false
 PROD_BACKEND_URL=
 PROD_FRONTEND_URL=
 """
-    (project_root / env_file_name).write_text(env_content, encoding='utf-8')
+    (project_root / ".env.local").write_text(env_content, encoding='utf-8')
 
     # --- Root Files ---
     (project_root / ".gitignore").write_text("node_modules/\ndist/\n.env.local\n.angular/\n.vscode/\n", encoding='utf-8')
@@ -941,50 +914,29 @@ PROD_FRONTEND_URL=
     delete_project_py = f"""import os
 import sys
 import subprocess
-import glob
+import time
 
 def main():
     project_name = "{project_name}"
-    is_in_place = {is_in_place}
     project_path = os.path.dirname(os.path.abspath(__file__))
-    prefix = "{project_name}-"
 
     print(f"\\n--- EMERGENCY DELETION: {{project_name}} ---")
-    if is_in_place:
-        print(f"INFO: In-place project detected. Everything starting with '{{prefix}}' will be removed.")
-    else:
-        print("INFO: Standard project detected. The entire folder will be removed.")
     print(f"Target Path: {{project_path}}\\n")
 
     # 3 Warnings
-    input(f"WARNING 1/3: This will PERMANENTLY delete project content. Press Enter...")
-    input("WARNING 2/3: All generated code, git history (if any), and node_modules will be GONE. Press Enter...")
-    input(f"WARNING 3/3: FINAL CONFIRMATION. Destroying '{{project_name}}'. Press Enter...")
+    input(f"WARNING 1/3: This will PERMANENTLY delete everything in {{project_path}}. Press Enter to continue...")
+    input("WARNING 2/3: All code, git history, and node_modules will be GONE. Press Enter to continue...")
+    input(f"WARNING 3/3: FINAL CONFIRMATION. You are about to destroy {{project_name}} at {{project_path}}. Press Enter to continue...")
 
     # Final verification
-    confirm = input(f"\\nTo confirm, type the exact project name '{{project_name}}' (or '.' to skip): ").strip()
+    confirm = input(f"\\nTo confirm, type the exact project name '{{project_name}}': ").strip()
 
-    if confirm == project_name or confirm == ".":
-        print("\\nOK. Initiating deletion...")
-        if not is_in_place:
-            # Delete whole folder
-            cmd = f"Start-Sleep -s 1; Remove-Item -Path '{{project_path}}' -Recurse -Force"
-            subprocess.Popen(["powershell", "-Command", cmd], shell=True)
-        else:
-            # Auto-discovery based on prefix
-            items_to_delete = glob.glob(os.path.join(project_path, f"{{prefix}}*"))
-            
-            for path in items_to_delete:
-                print(f"  Deleting {{os.path.basename(path)}}...")
-                if os.path.isdir(path):
-                    subprocess.run(["powershell", "-Command", f"Remove-Item -Path '{{path}}' -Recurse -Force"], shell=True)
-                else:
-                    try: os.remove(path)
-                    except: subprocess.run(["powershell", "-Command", f"Remove-Item -Path '{{path}}' -Force"], shell=True)
-            
-            # Delete itself last
-            self_path = os.path.abspath(__file__)
-            subprocess.Popen(["powershell", "-Command", f"Start-Sleep -s 1; Remove-Item -Path '{{self_path}}' -Force"], shell=True)
+    if confirm == project_name:
+        print("\\nOK. Initiating force-deletion in 1 second...")
+        # PowerShell command to wait 1 second and then delete the folder
+        # We spawn it as a separate process so this script can exit and unlock the folder
+        cmd = f"Start-Sleep -s 1; Remove-Item -Path '{{project_path}}' -Recurse -Force"
+        subprocess.Popen(["powershell", "-Command", cmd], shell=True)
         sys.exit(0)
     else:
         print("\\nName mismatch. Deletion cancelled.")
@@ -992,7 +944,7 @@ def main():
 if __name__ == '__main__':
     main()
 """
-    (project_root / delete_script_name).write_text(delete_project_py, encoding='utf-8')
+    (project_root / "delete-project.py").write_text(delete_project_py, encoding='utf-8')
 
     # AI Config
     ai_rules_common = f"""## Agent Operational Directives
@@ -1003,7 +955,7 @@ if __name__ == '__main__':
 """
 
     if ai_choice == "Agents.md":
-        ai_content = f"""# {project_name} - Agent Instructions
+        (project_root / "AGENTS.md").write_text(f"""# {project_name} - Agent Instructions
 
 This project follows a decoupled MEAN stack architecture.
 
@@ -1021,16 +973,15 @@ This project follows a decoupled MEAN stack architecture.
 - Always maintain the iframe security headers in `backend/app.js`.
 - Prefer Signals for Angular state.
 - Use standalone components.
-- **Environment**: If you modify the root {env_file_name}, remind the user to `git push` to sync with Vercel.
+- **Environment**: If you modify the root `.env.local`, remind the user to `git push` to sync with Vercel.
 
 {ai_rules_common}
-"""
-        (project_root / ai_file_name).write_text(ai_content, encoding='utf-8')
+""", encoding='utf-8')
     elif ai_choice == "Cursor":
-        (project_root / ai_file_name).write_text(f"# {project_name} Cursor Rules\n\n- Angular 21 (Signals, standalone).\n- Maintain iframe CSP headers in backend/app.js.\n\n{ai_rules_common}\n", encoding='utf-8')
+        (project_root / ".cursorrules").write_text(f"# {project_name} Cursor Rules\n\n- Angular 21 (Signals, standalone).\n- Maintain iframe CSP headers in backend/app.js.\n\n{ai_rules_common}\n", encoding='utf-8')
     elif ai_choice == "Claude":
         claude_dir = project_root / ".claudecode"
-        claude_dir.mkdir(exist_ok=True)
+        claude_dir.mkdir()
         (claude_dir / "memory.md").write_text(f"""# Project Memory: {project_name}
 
 ## Summary
@@ -1052,17 +1003,16 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
             print("Linking to Vercel...")
             subprocess.run(["npx", "vercel", "link", "--yes", "--project", project_slug], cwd=project_root, shell=True, check=True)
             
-            # 3. Sync Env to Vault
-            if (project_root / env_file_name).exists():
-                print(f"Syncing {{env_file_name}} to Vercel Vault...")
-                with open(project_root / env_file_name, "r") as f:
+            # 3. Sync .env.local to Vault
+            if (project_root / ".env.local").exists():
+                print("Syncing .env.local to Vercel Vault...")
+                with open(project_root / ".env.local", "r") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
                             key, val = line.split("=", 1)
                             if key and val:
                                 subprocess.run([
-                                    "npx", "vercel", "env", "add",
                                     key.strip(), "production", val.strip(),
                                     "--non-interactive", "--yes", "--project", project_slug
                                 ], cwd=project_root, shell=True)
@@ -1075,16 +1025,16 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
         print("Initialized Git repository.")
         
         # --- Vercel Watcher (Git Hook) ---
-        sync_env_py = f"""import os
+        sync_env_py = """import os
 import subprocess
 from pathlib import Path
 
 def sync_vercel_env():
-    \"\"\"Reads the root {env_file_name} and syncs each variable to the Vercel Production vault.\"\"\"
-    env_path = Path('{env_file_name}')
+    \"\"\"Reads the root .env and syncs each variable to the Vercel Production vault.\"\"\"
+    env_path = Path('.env')
     
     if not env_path.exists():
-        print(\"?? No {env_file_name} file found in the root. Skipping sync.\")
+        print(\"?? No .env file found in the root. Skipping sync.\")
         return
 
     print("Vercel Watcher: Syncing local .env to Production Vault...")
@@ -1154,9 +1104,8 @@ exit 0
     print("\nProject creation complete!")
     print(f"Location: {project_root}")
     print("\nNext steps:")
-    print(f"  cd {backend_root.name} && npm start")
-    print(f"  cd {frontend_root.name} && npm start")
-
+    print(f"  cd {project_name}/backend && npm start")
+    print(f"  cd {project_name}/frontend && npm start")
 
 if __name__ == "__main__":
     main()
