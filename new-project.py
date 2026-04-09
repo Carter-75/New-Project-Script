@@ -165,7 +165,6 @@ const resolveEnvPath = () => {
 };
 require('dotenv').config({ path: resolveEnvPath() });
 const express = require('express');
-const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const cors = require('cors');
@@ -174,7 +173,6 @@ const helmet = require('helmet');
 
 const app = express();
 
-require('dotenv').config({ path: require('path').join(__dirname, '../.env.local') });
 
 // --- Diagnostic Routes (Moved up for early availability) ---
 app.get('/api/health', (req, res) => {
