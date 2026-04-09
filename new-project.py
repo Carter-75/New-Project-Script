@@ -470,6 +470,11 @@ export const appConfig: ApplicationConfig = {
 };
 """
 
+    fe_app_routes_ts = """import { Routes } from '@angular/router';
+
+export const routes: Routes = [];
+"""
+
     # --- ApiService Template (Simplified & General) ---
     fe_api_service_ts = f"""import {{ Injectable, inject }} from '@angular/core';
 import {{ HttpClient }} from '@angular/common/http';
@@ -879,6 +884,11 @@ export class App implements OnInit {{
     (app_dir / f"app.{style_ext}").write_text("/* App Styles */\n", encoding='utf-8')
     (app_dir / "app.config.ts").write_text(fe_app_config_ts, encoding='utf-8')
     (app_dir / "app.routes.ts").write_text(fe_app_routes_ts, encoding='utf-8')
+
+    # Services
+    services_dir = app_dir / "services"
+    services_dir.mkdir()
+    (services_dir / "api.service.ts").write_text(fe_api_service_ts, encoding='utf-8')
 
     # --- Env File (Root Only) ---
     env_content = f"""PROJECT_NAME={project_name}
