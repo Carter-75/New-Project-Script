@@ -2,6 +2,7 @@
 import os
 import json
 import subprocess
+import ctypes
 from pathlib import Path
 
 def ask_input(prompt, default=None, validation_func=None, options=None):
@@ -42,6 +43,16 @@ def ask_input(prompt, default=None, validation_func=None, options=None):
         return user_input
 
 def main():
+    # 0. Safety Check for Admin (Windows)
+    try:
+        if ctypes.windll.shell32.IsUserAnAdmin() != 0:
+            print("--- WARNING: SCRIPT RUNNING AS ADMINISTRATOR ---")
+            print("Creating projects as Admin can make them hard to delete later.")
+            print("It is recommended to run this in a standard user terminal.\n")
+    except AttributeError:
+        # Non-Windows systems ignore this
+        pass
+
     print("--- Unified MEAN Project Generator (Angular + Express + Mongo) ---")
     print("      Features: Physics (Matter.js), Anime.js, Iframe Security\n")
 
@@ -943,13 +954,9 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
     if fe_hosting == "vercel" or be_hosting == "vercel":
         print("\n--- Preparing Vercel Environment ---")
         try:
-            # 1. Update CLI
-            subprocess.run(["npm", "install", "-g", "vercel@latest"], shell=True, check=True)
-            print("Vercel CLI updated.")
-
-            # 2. Link Project
+            # 1. Link Project (Uses npx to avoid global requirement/admin issues)
             print("Linking to Vercel...")
-            subprocess.run(["vercel", "link", "--yes"], shell=True, check=True)
+            subprocess.run(["npx", "vercel", "link", "--yes"], shell=True, check=True)
             
             # 3. Sync .env.local to Vault
             if (project_root / ".env.local").exists():
@@ -961,8 +968,8 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                             key, val = line.split("=", 1)
                             if key and val:
                                 subprocess.run([
-                                    "vercel", "env", "add", 
-                                    key.strip(), val.strip(), "production", 
+                                    "npx", "vercel", "env", "add", 
+                                    key.strip(), "production", val.strip(),
                                     "--non-interactive", "--yes"
                                 ], shell=True)
                 print("Vercel Vault synced successfully.")
