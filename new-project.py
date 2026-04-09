@@ -166,7 +166,6 @@ const resolveEnvPath = () => {
 };
 require('dotenv').config({ path: resolveEnvPath() });
 const express = require('express');
-const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const cors = require('cors');
@@ -1093,8 +1092,8 @@ exit 0
     print("\nProject creation complete!")
     print(f"Location: {project_root}")
     print("\nNext steps:")
-    print(f"  cd {project_name}/backend && npm start")
-    print(f"  cd {project_name}/frontend && npm start")
+    print(f"  cd {project_name}/backend ; npm start")
+    print(f"  cd {project_name}/frontend ; npm start")
 
 if __name__ == "__main__":
     main()
