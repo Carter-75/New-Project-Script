@@ -134,14 +134,25 @@ def main():
             "morgan": "~1.10.0",
             "mongoose": "^8.0.0",
             "helmet": "^7.1.0",
-            "dotenv": "^16.4.5"
+            "dotenv": "^16.4.5",
+            "openai": "^4.55.0",
+            "ws": "^8.18.0",
+            "zod": "^3.23.8"
         },
         "devDependencies": {
             "nodemon": "^3.1.0"
         }
     }
 
-    be_app_js = """require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
+    be_app_js = """// Explicit Environment Resolution
+const path = require('path');
+const fs = require('fs');
+const resolveEnvPath = () => {
+  const candidates = [path.join(process.cwd(), '.env'), path.join(process.cwd(), 'backend', '.env')];
+  for (const c of candidates) { if (fs.existsSync(c)) return c; }
+  return candidates[0];
+};
+require('dotenv').config({ path: resolveEnvPath() });
 const express = require('express');
 const path = require('path');
 const cookieParser = require('cookie-parser');
@@ -150,9 +161,51 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
-const indexRouter = require('./routes/index');
-
 const app = express();
+
+// --- Diagnostic Routes (Moved up for early availability) ---
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'online',
+    cwd: process.cwd(),
+    dirname: __dirname,
+    env: process.env.PRODUCTION === 'true' ? 'production' : 'development',
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/debug-bundle', async (req, res) => {
+  const fs = require('fs').promises;
+  async function listFiles(dir) {
+    let results = [];
+    const list = await fs.readdir(dir, { withFileTypes: true });
+    for (const file of list) {
+      const res = path.resolve(dir, file.name);
+      if (file.isDirectory()) {
+        results.push({ name: file.name, type: 'dir', children: await listFiles(res) });
+      } else {
+        results.push({ name: file.name, type: 'file' });
+      }
+    }
+    return results;
+  }
+  try {
+    const root = await listFiles(process.cwd());
+    res.json({ root });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
+let aiRouter;
+try {
+  // We assume aiRouter might be added later or exist in certain flavors
+  // For the general template, we'll keep it as a placeholder or empty
+} catch (err) {
+  console.error('FATAL: Failed to load aiRouter:', err);
+}
+
+const indexRouter = require('./routes/index');
 
 const PROJECT_NAME = process.env.PROJECT_NAME || 'Portfolio Project';
 
@@ -181,9 +234,12 @@ const isProd = process.env.PRODUCTION === 'true';
 const prodUrl = process.env.PROD_FRONTEND_URL;
 
 const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${process.env.PORT || '{be_port}'}`];
-if (isProd && prodUrl) {
+if (prodUrl) {{
   frameAncestors.push(prodUrl);
-}
+}}
+if (process.env.PROD_BACKEND_URL) {{
+  frameAncestors.push(process.env.PROD_BACKEND_URL);
+}}
 
 app.use(helmet({
   contentSecurityPolicy: {
@@ -204,6 +260,9 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api', indexRouter);
+if (aiRouter) {
+  app.use('/api/ai', aiRouter);
+}
 
 // Error handler
 app.use((err, req, res, next) => {
@@ -280,12 +339,12 @@ module.exports = router;
         fe_dev_deps.update({"@types/canvas-confetti": "^1.6.4"})
 
     fe_package_json = {
-        "name": f"{project_name}-frontend",
+        "name": f"{project_name.lower()}-frontend",
         "version": "0.0.0",
         "scripts": {
             "ng": "ng",
             "start": "ng serve",
-            "build": "ng build && node -e \\\"const fs = require('fs'); const src = 'dist/frontend/browser'; const dest = 'dist/frontend'; if (fs.existsSync(src)) { fs.cpSync(src, dest, {recursive: true}); fs.rmSync(src, {recursive: true}); }\\\"",
+            "build": f"node -e \\\"const fs = require('fs'); const file = 'src/app/services/api.service.ts'; let c = fs.readFileSync(file, 'utf8'); c = c.replace('__PRODUCTION__', process.env.PRODUCTION || 'false').replace('__PROD_BACKEND_URL__', process.env.PROD_BACKEND_URL || '').replace('__PROD_FRONTEND_URL__', process.env.PROD_FRONTEND_URL || ''); fs.writeFileSync(file, c);\\\" && ng build && node -e \\\"const fs = require('fs'); const src = 'dist/frontend/browser'; const dest = 'dist/frontend'; if (fs.existsSync(src)) {{ fs.cpSync(src, dest, {{recursive: true}}); fs.rmSync(src, {{recursive: true}}); }}\\\"",
             "watch": "ng build --watch --configuration development",
             "test": "vitest"
         },
@@ -418,27 +477,32 @@ export class ApiService {{
     const host = window.location.hostname;
     const isLocal = host === 'localhost' || host === '127.0.0.1';
     
-    // In local development (and if not explicitly forced to prod), use local server
+    // 1. If we are local and not forced into production mode, hit the raw local port
     if (isLocal && !isProd) {{
       return 'http://localhost:{be_port}/api';
     }}
 
-    // In production, use the relative path (handled by Vercel Proxy)
+    // 2. If we are in production (or forced), prioritize the explicit backend URL from env
+    if (prodBackend && prodBackend !== '' && !prodBackend.includes('__PROD_')) {{
+      return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
+    }}
+
+    // 3. Fallback: Use the universal relative path (handled by Vercel Proxy)
     return '/api';
   }}
 
   /**
    * Universal GET wrapper
    */
-  getData(endpoint: string): Observable<any> {{
-    return this.http.get(`${{this.apiUrl}}/${{endpoint}}`);
+  getData<T>(endpoint: string): Observable<T> {{
+    return this.http.get<T>(`${{this.apiUrl}}/${{endpoint}}`);
   }}
 
   /**
    * Universal POST wrapper
    */
-  postData(endpoint: string, body: any): Observable<any> {{
-    return this.http.post(`${{this.apiUrl}}/${{endpoint}}`, body);
+  postData<T>(endpoint: string, body: any): Observable<T> {{
+    return this.http.post<T>(`${{this.apiUrl}}/${{endpoint}}`, body);
   }}
 }}
 """
@@ -540,11 +604,11 @@ npm start
 """
 
     # Component imports and logic
-    imports_list = ["Component", "signal"]
+    imports_list = ["Component", "signal", "inject", "OnInit"]
     if use_matter or use_anime or use_confetti:
         imports_list.extend(["viewChild", "ElementRef", "afterNextRender", "OnDestroy"])
     
-    physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\n"
+    physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\nimport {{ ApiService }} from './services/api.service';\n"
     if use_matter: physics_imports += "import * as Matter from 'matter-js';\n"
     if use_anime: physics_imports += "import anime from 'animejs';\n"
     if use_confetti: physics_imports += "import confetti from 'canvas-confetti';\n"
@@ -656,8 +720,15 @@ import {{ RouterOutlet }} from '@angular/router';
   templateUrl: './app.html',
   styleUrl: './app.{style_ext}'
 }})
-export class App {{
+export class App implements OnInit {{
+  private api = inject(ApiService);
   protected readonly title = signal('{project_name}');
+  
+  ngOnInit() {{
+    // Example universal call
+    this.api.getData('ping').subscribe(res => console.log('API Status:', res));
+  }}
+
   {physics_logic}
 }}
 """
@@ -716,18 +787,29 @@ export class App {{
     (backend_root / "routes" / "index.js").write_text(be_routes_index, encoding='utf-8')
     (backend_root / "models").mkdir()
     
-    if fe_hosting == "vercel":
+    if fe_hosting == "vercel" or be_hosting == "vercel":
+        # 1. Frontend Proxy Bridge
         fe_vercel_json = {
-            "cleanUrls": true,
-            "trailingSlash": false,
+            "cleanUrls": True,
+            "trailingSlash": False,
             "rewrites": [
-                { "source": "/api/:path*", "destination": "https://YOUR-BACKEND-URL.vercel.app/api/:path*" },
+                { "source": "/api/:path*", "destination": f"https://{project_name}-backend.vercel.app/api/:path*" },
                 { "source": "/(.*)", "destination": "/index.html" }
             ]
         }
         (frontend_root / "vercel.json").write_text(json.dumps(fe_vercel_json, indent=2), encoding='utf-8')
 
-        vercel_config = {
+        # 2. Backend Standalone Configuration
+        be_vercel_json = {
+            "version": 2,
+            "functions": {
+                "app.js": {
+                    "includeFiles": "{services,models,controllers,routes}/**"
+                }
+            },
+            "rewrites": [
+                { "source": "/(.*)", "destination": "app.js" }
+            ],
             "headers": [
                 {
                     "source": "/(.*)",
@@ -741,7 +823,7 @@ export class App {{
                 }
             ]
         }
-        (backend_root / "vercel.json").write_text(json.dumps(vercel_config, indent=2), encoding='utf-8')
+        (backend_root / "vercel.json").write_text(json.dumps(be_vercel_json, indent=2), encoding='utf-8')
 
     # --- Write Frontend ---
     (frontend_root / "package.json").write_text(json.dumps(fe_package_json, indent=2), encoding='utf-8')
@@ -797,6 +879,7 @@ PRODUCTION=false
 # --- Back-End Production ---
 # ONCE DEPLOYED: Update your vercel.json 'destination' to match this URL!
 PROD_BACKEND_URL=
+PROD_FRONTEND_URL=
 """
     (project_root / ".env").write_text(env_content, encoding='utf-8')
 
@@ -900,35 +983,35 @@ def sync_vercel_env():
         print(\"?? No .env file found in the root. Skipping sync.\")
         return
 
-    print(\"🚀 Vercel Watcher: Syncing local .env to Production Vault...\")
+    print("Vercel Watcher: Syncing local .env to Production Vault...")
     
     try:
         # We assume the project is linked (via 'vercel link' or similar)
         # The 'env add' command will handle link errors if they occur
-        with open(env_path, \"r\", encoding='utf-8') as f:
+        with open(env_path, "r", encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
-                if not line or line.startswith(\"#\") or \"=\" not in line:
+                if not line or line.startswith("#") or "=" not in line:
                     continue
                 
-                key, val = line.split(\"=\", 1)
+                key, val = line.split("=", 1)
                 key = key.strip()
                 val = val.strip()
                 
                 if key and val:
                     subprocess.run(
-                        [\"vercel\", \"env\", \"add\", key, val, \"production\", \"--non-interactive\", \"--yes\"],
+                        ["vercel", "env", "add", key, val, "production", "--non-interactive", "--yes"],
                         shell=True,
                         capture_output=True
                     )
-                    print(f\"   ? Synced: {key}\")
+                    print(f"   Synced: {key}")
 
-        print(\"? Vercel Vault is now up to date.\")
+        print("Vercel Vault is now up to date.")
 
     except Exception as e:
-        print(f\"?? Error during Vercel sync: {e}\")
+        print(f"Error during Vercel sync: {e}")
 
-if __name__ == \"__main__\":
+if __name__ == "__main__":
     sync_vercel_env()
 """
         (project_root / "sync-env.py").write_text(sync_env_py, encoding='utf-8')
