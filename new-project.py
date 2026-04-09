@@ -166,6 +166,7 @@ const resolveEnvPath = () => {
 };
 require('dotenv').config({ path: resolveEnvPath() });
 const express = require('express');
+const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const cors = require('cors');
@@ -174,6 +175,7 @@ const helmet = require('helmet');
 
 const app = express();
 
+require('dotenv').config({ path: require('path').join(__dirname, '../.env.local') });
 
 // --- Diagnostic Routes (Moved up for early availability) ---
 app.get('/api/health', (req, res) => {
@@ -657,23 +659,16 @@ npm start
     {"if (this.engine) Matter.Engine.clear(this.engine);" if use_matter else ""}
   }}
 
+
   private handleResize = () => {{
     const el = this.container()?.nativeElement;
     if (el && {'this.render' if use_matter else 'false'}) {{
       {( 'this.render.canvas.width = el.clientWidth; this.render.options.width = el.clientWidth;' if use_matter else '')}
     }}
   }};
-
-  protected celebrate() {{
-    { 'confetti({ particleCount: 150, spread: 70, origin: { y: 0.6 } });' if use_confetti else "console.log('Confetti is disabled');" }
-  }}
 """
     else:
-        physics_logic = """
-  protected celebrate() {
-    console.log('Confetti is disabled');
-  }
-"""
+        physics_logic = ""
     if use_anime:
         physics_logic += """
   private initAnimation() {
@@ -752,7 +747,6 @@ export class App implements OnInit {{
 
     # Template logic (Tailwind vs Bulma vs Plain)
     card_classes = "box" if css_choice == "bulma" else "p-8 bg-white rounded-xl shadow-2xl border border-gray-100"
-    btn_classes = "button is-primary" if css_choice == "bulma" else "px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
     container_classes = "container" if css_choice == "bulma" else "max-w-4xl mx-auto p-4 flex items-center justify-center min-h-screen"
     scene_classes = "mt-4 border rounded-lg bg-gray-50 h-[220px]" if css_choice == "tailwind" else "scene mt-4"
 
@@ -762,11 +756,6 @@ export class App implements OnInit {{
     <h1 class="text-4xl font-bold mb-4 font-inter">Welcome to {project_name}</h1>
     <p class="text-gray-600 mb-6">Built with Angular v21, Node/Express, and MongoDB.</p>
     
-    <div class="flex gap-4 justify-center">
-      <button class="{btn_classes}" (click)="celebrate()">
-        Celebrate
-      </button>
-    </div>
 
     <div #scene class="{scene_classes}">
       <!-- Physics Scene -->
