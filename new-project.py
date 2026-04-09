@@ -719,15 +719,12 @@ npm start
     Matter.Render.run(this.render);
   }
 """
-
     fe_app_ts = f"""{physics_imports}
-import {{ RouterOutlet }} from '@angular/router';
-
 
 @Component({{
   selector: 'app-root',
   standalone: true,
-  imports: [RouterOutlet],
+  imports: [],
   templateUrl: './app.html',
   styleUrl: './app.{style_ext}'
 }})
@@ -760,8 +757,6 @@ export class App implements OnInit {{
       <!-- Physics Scene -->
     </div>
   </div>
-
-  <router-outlet></router-outlet>
 </main>
 """
 
