@@ -966,7 +966,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
         try:
             # 1. Link Project (Uses npx to avoid global requirement/admin issues)
             print("Linking to Vercel...")
-            subprocess.run(["npx", "vercel", "link", "--yes"], shell=True, check=True)
+            subprocess.run(["npx", "vercel", "link", "--yes"], cwd=project_root, shell=True, check=True)
             
             # 3. Sync .env.local to Vault
             if (project_root / ".env.local").exists():
@@ -981,7 +981,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                                     "npx", "vercel", "env", "add", 
                                     key.strip(), "production", val.strip(),
                                     "--non-interactive", "--yes"
-                                ], shell=True)
+                                ], cwd=project_root, shell=True)
                 print("Vercel Vault synced successfully.")
 
         except subprocess.CalledProcessError as e:
