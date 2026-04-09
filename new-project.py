@@ -806,6 +806,7 @@ export class App implements OnInit {{
             "version": 2,
             "functions": {
                 "app.js": {
+                    "maxDuration": 60,
                     "includeFiles": "{services,models,controllers,routes}/**"
                 }
             },
