@@ -472,7 +472,9 @@ export const appConfig: ApplicationConfig = {
 
     fe_app_routes_ts = """import { Routes } from '@angular/router';
 
-export const routes: Routes = [];
+export const routes: Routes = [
+  { path: '', redirectTo: 'home', pathMatch: 'full' }
+];
 """
 
     # --- ApiService Template (Simplified & General) ---
@@ -720,11 +722,12 @@ npm start
   }
 """
     fe_app_ts = f"""{physics_imports}
+import {{ RouterOutlet }} from '@angular/router';
 
 @Component({{
   selector: 'app-root',
   standalone: true,
-  imports: [],
+  imports: [RouterOutlet],
   templateUrl: './app.html',
   styleUrl: './app.{style_ext}'
 }})
@@ -758,6 +761,8 @@ export class App implements OnInit {{
     </div>
   </div>
 </main>
+
+<router-outlet></router-outlet>
 """
 
     fe_index_html = f"""<!DOCTYPE html>
@@ -898,6 +903,7 @@ PROD_FRONTEND_URL=
 import sys
 import subprocess
 import time
+import shutil
 
 def main():
     project_name = "{project_name}"
@@ -905,6 +911,12 @@ def main():
 
     print(f"\\n--- EMERGENCY DELETION: {{project_name}} ---")
     print(f"Target Path: {{project_path}}\\n")
+
+    # Check if we are inside the directory
+    if os.getcwd() == project_path:
+        print("WARNING: You are currently INSIDE the project directory in your terminal.")
+        print("To fully delete the root folder, you should 'cd ..' after this script finishes.")
+        print("I will attempt to delete all contents first.\\n")
 
     # 3 Warnings
     input(f"WARNING 1/3: This will PERMANENTLY delete everything in {{project_path}}. Press Enter to continue...")
@@ -915,10 +927,24 @@ def main():
     confirm = input(f"\\nTo confirm, type the exact project name '{{project_name}}': ").strip()
 
     if confirm == project_name:
-        print("\\nOK. Initiating force-deletion in 1 second...")
-        # PowerShell command to wait 1 second and then delete the folder
-        # We spawn it as a separate process so this script can exit and unlock the folder
-        cmd = f"Start-Sleep -s 1; Remove-Item -Path '{{project_path}}' -Recurse -Force"
+        print("\\nOK. Initiating force-deletion...")
+        
+        # 1. Try to delete contents first (more reliable if root is locked by shell)
+        for item in os.listdir(project_path):
+            if item == 'delete-project.py': continue
+            item_path = os.path.join(project_path, item)
+            try:
+                if os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+                else:
+                    os.remove(item_path)
+                print(f"   Deleted: {{item}}")
+            except Exception as e:
+                print(f"   [!] Could not delete {{item}}: {{e}}")
+
+        # 2. Spawn a background process to kill this script and try to remove the root and itself
+        print("\\nAttempting to remove self and root directory in 1 second...")
+        cmd = f"Start-Sleep -s 1; Remove-Item -Path '{{project_path}}' -Recurse -Force -ErrorAction SilentlyContinue"
         subprocess.Popen(["powershell", "-Command", cmd], shell=True)
         sys.exit(0)
     else:
@@ -996,7 +1022,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                             key, val = line.split("=", 1)
                             if key and val:
                                 subprocess.run([
-                                    key.strip(), "production", val.strip(),
+                                    "npx", "vercel", "env", "add", key.strip(), "production", val.strip(),
                                     "--non-interactive", "--yes", "--project", project_slug
                                 ], cwd=project_root, shell=True)
                 print("Vercel Vault synced successfully.")
