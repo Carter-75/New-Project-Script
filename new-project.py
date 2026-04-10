@@ -470,12 +470,7 @@ export const appConfig: ApplicationConfig = {
 };
 """
 
-    fe_app_routes_ts = """import { Routes } from '@angular/router';
 
-export const routes: Routes = [
-  { path: '', redirectTo: 'home', pathMatch: 'full' }
-];
-"""
 
     # --- ApiService Template (Simplified & General) ---
     fe_api_service_ts = f"""import {{ Injectable, inject }} from '@angular/core';
@@ -721,22 +716,40 @@ npm start
     Matter.Render.run(this.render);
   }
 """
-    fe_app_ts = f"""{physics_imports}
+    fe_app_ts = f"""import {{ Component }} from '@angular/core';
 import {{ RouterOutlet }} from '@angular/router';
 
 @Component({{
   selector: 'app-root',
   standalone: true,
   imports: [RouterOutlet],
-  templateUrl: './app.html',
-  styleUrl: './app.{style_ext}'
+  template: '<router-outlet></router-outlet>',
 }})
-export class App implements OnInit {{
+export class App {{}}
+"""
+
+    fe_app_routes_ts = """import { Routes } from '@angular/router';
+import { HomeComponent } from './home/home.component';
+
+export const routes: Routes = [
+  { path: '', redirectTo: 'home', pathMatch: 'full' },
+  { path: 'home', component: HomeComponent }
+];
+"""
+
+    fe_home_component_ts = f"""{physics_imports}
+@Component({{
+  selector: 'app-home',
+  standalone: true,
+  imports: [],
+  templateUrl: './home.component.html',
+  styleUrl: './home.component.{style_ext}'
+}})
+export class HomeComponent implements OnInit {{
   private api = inject(ApiService);
   protected readonly title = signal('{project_name}');
   
   ngOnInit() {{
-    // Example universal call
     this.api.getData('ping').subscribe(res => console.log('API Status:', res));
   }}
 
@@ -749,7 +762,7 @@ export class App implements OnInit {{
     container_classes = "container" if css_choice == "bulma" else "max-w-4xl mx-auto p-4 flex items-center justify-center min-h-screen"
     scene_classes = "mt-4 border rounded-lg bg-gray-50 h-[220px]" if css_choice == "tailwind" else "scene mt-4"
 
-    fe_app_html = f"""<main class="{container_classes}">
+    fe_home_html = f"""<main class="{container_classes}">
   <div #card class="{card_classes} text-center">
     <p class="text-xs uppercase tracking-widest text-gray-500 mb-2">Portfolio Project</p>
     <h1 class="text-4xl font-bold mb-4 font-inter">Welcome to {project_name}</h1>
@@ -761,8 +774,6 @@ export class App implements OnInit {{
     </div>
   </div>
 </main>
-
-<router-outlet></router-outlet>
 """
 
     fe_index_html = f"""<!DOCTYPE html>
@@ -867,10 +878,15 @@ export class App implements OnInit {{
     app_dir = src_root / "app"
     app_dir.mkdir()
     (app_dir / "app.ts").write_text(fe_app_ts, encoding='utf-8')
-    (app_dir / "app.html").write_text(fe_app_html, encoding='utf-8')
-    (app_dir / f"app.{style_ext}").write_text("/* App Styles */\n", encoding='utf-8')
     (app_dir / "app.config.ts").write_text(fe_app_config_ts, encoding='utf-8')
     (app_dir / "app.routes.ts").write_text(fe_app_routes_ts, encoding='utf-8')
+
+    # Home Component
+    home_dir = app_dir / "home"
+    home_dir.mkdir()
+    (home_dir / "home.component.ts").write_text(fe_home_component_ts, encoding='utf-8')
+    (home_dir / "home.component.html").write_text(fe_home_html, encoding='utf-8')
+    (home_dir / f"home.component.{style_ext}").write_text("/* Home Styles */\n", encoding='utf-8')
 
     # Services
     services_dir = app_dir / "services"
@@ -883,15 +899,15 @@ PORT={be_port}
 FRONTEND_PORT={fe_port}
 MONGODB_URI=mongodb://localhost:27017/{project_name}
 
-# --- Front-End Production (Copy to Vercel Frontend Project) ---
-# NOTE: Run 'vercel link' once in this directory to enable the Automated Vault Sync!
+# --- Production Configuration ---
 PRODUCTION=false
 
-# --- Back-End Production ---
-# ONCE DEPLOYED: Update your vercel.json 'destination' to match this URL!
+# --- Back-End Deployment ---
+# Update your vercel.json 'destination' to match the production URL after deployment!
 PROD_BACKEND_URL=
 PROD_FRONTEND_URL=
 """
+    # Note: We write this again later after Vercel initialization to ensure it's preserved.
     (project_root / ".env.local").write_text(env_content, encoding='utf-8')
 
     # --- Root Files ---
@@ -915,8 +931,8 @@ def main():
     # Check if we are inside the directory
     if os.getcwd() == project_path:
         print("WARNING: You are currently INSIDE the project directory in your terminal.")
-        print("To fully delete the root folder, you should 'cd ..' after this script finishes.")
-        print("I will attempt to delete all contents first.\\n")
+        print("I will change the current directory to '..' to allow full deletion.\\n")
+        os.chdir('..')
 
     # 3 Warnings
     input(f"WARNING 1/3: This will PERMANENTLY delete everything in {{project_path}}. Press Enter to continue...")
@@ -929,13 +945,13 @@ def main():
     if confirm == project_name:
         print("\\nOK. Initiating force-deletion...")
         
-        # 1. Try to delete contents first (more reliable if root is locked by shell)
+        # 1. Try to delete contents first
         for item in os.listdir(project_path):
             if item == 'delete-project.py': continue
             item_path = os.path.join(project_path, item)
             try:
                 if os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
+                    shutil.rmtree(item_path, ignore_errors=True)
                 else:
                     os.remove(item_path)
                 print(f"   Deleted: {{item}}")
@@ -943,8 +959,9 @@ def main():
                 print(f"   [!] Could not delete {{item}}: {{e}}")
 
         # 2. Spawn a background process to kill this script and try to remove the root and itself
-        print("\\nAttempting to remove self and root directory in 1 second...")
-        cmd = f"Start-Sleep -s 1; Remove-Item -Path '{{project_path}}' -Recurse -Force -ErrorAction SilentlyContinue"
+        print("\\nAttempting to remove root directory in 1 second...")
+        # We use a more aggressive PowerShell command that retries and ignores errors
+        cmd = f"Start-Sleep -s 1; 1..5 | % {{{{ Remove-Item -Path '{{project_path}}' -Recurse -Force -ErrorAction SilentlyContinue; if (!(Test-Path '{{project_path}}')) {{{{ break }}}}; Start-Sleep -s 1 }}}}"
         subprocess.Popen(["powershell", "-Command", cmd], shell=True)
         sys.exit(0)
     else:
@@ -1008,24 +1025,58 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
     if fe_hosting == "vercel" or be_hosting == "vercel":
         print("\n--- Preparing Vercel Environment ---")
         try:
-            # 1. Link Project (Uses npx to avoid global requirement/admin issues)
+            # 1. Link Project (Showing output as requested so user can see Vercel environment changes)
             print("Linking to Vercel...")
             subprocess.run(["npx", "vercel", "link", "--yes", "--project", project_slug], cwd=project_root, shell=True, check=True)
             
-            # 3. Sync .env.local to Vault
-            if (project_root / ".env.local").exists():
-                print("Syncing .env.local to Vercel Vault...")
-                with open(project_root / ".env.local", "r") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#") and "=" in line:
-                            key, val = line.split("=", 1)
-                            if key and val:
-                                subprocess.run([
-                                    "npx", "vercel", "env", "add", key.strip(), "production", val.strip(),
-                                    "--non-interactive", "--yes", "--project", project_slug
-                                ], cwd=project_root, shell=True)
-                print("Vercel Vault synced successfully.")
+            # 2. Merge our variables into .env.local (Preserving Vercel-provided tokens like VERCEL_OIDC_TOKEN)
+            existing_env = {}
+            env_file = project_root / ".env.local"
+            if env_file.exists():
+                for line in env_file.read_text(encoding='utf-8').splitlines():
+                    if "=" in line and not line.strip().startswith("#"):
+                        k, v = line.split("=", 1)
+                        existing_env[k.strip()] = v.strip()
+            
+            # Update with our generated content
+            for line in env_content.splitlines():
+                if "=" in line and not line.strip().startswith("#"):
+                    k, v = line.split("=", 1)
+                    existing_env[k.strip()] = v.strip()
+            
+            # Write back the merged content
+            merged_content = ""
+            # Keep original structure for our vars
+            merged_content += f"PROJECT_NAME={existing_env.get('PROJECT_NAME', project_name)}\n"
+            merged_content += f"PORT={existing_env.get('PORT', be_port)}\n"
+            merged_content += f"FRONTEND_PORT={existing_env.get('FRONTEND_PORT', fe_port)}\n"
+            merged_content += f"MONGODB_URI={existing_env.get('MONGODB_URI', f'mongodb://localhost:27017/{project_name}')}\n\n"
+            merged_content += "# --- Production Configuration ---\n"
+            merged_content += f"PRODUCTION={existing_env.get('PRODUCTION', 'false')}\n\n"
+            merged_content += "# --- Back-End Deployment ---\n"
+            merged_content += f"PROD_BACKEND_URL={existing_env.get('PROD_BACKEND_URL', '')}\n"
+            merged_content += f"PROD_FRONTEND_URL={existing_env.get('PROD_FRONTEND_URL', '')}\n\n"
+            
+            merged_content += "# --- Vercel Managed Variables ---\n"
+            for k, v in existing_env.items():
+                if k not in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL']:
+                    merged_content += f"{k}={v}\n"
+            
+            env_file.write_text(merged_content, encoding='utf-8')
+
+            # 3. Sync .env.local variables to Vault
+            print("Syncing .env.local to Vercel Vault...")
+            vars_added = 0
+            # We only sync our primary app vars, not the Vercel tokens themselves
+            sync_keys = ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL']
+            for key in sync_keys:
+                if key in existing_env:
+                    subprocess.run([
+                        "npx", "vercel", "env", "add", key, "production", 
+                        "--value", existing_env[key], "--non-interactive", "--yes"
+                    ], cwd=project_root, shell=True)
+                    vars_added += 1
+            print(f"✅ Vercel Vault synced successfully ({vars_added} variables added).")
 
         except subprocess.CalledProcessError as e:
             print(f"Warning: Vercel preparation encountered an issue: {e}")
@@ -1063,7 +1114,7 @@ def sync_vercel_env():
                 
                 if key and val:
                     result = subprocess.run(
-                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes", "--project", project_slug],
+                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes"],
                         shell=True,
                         capture_output=True,
                         text=True
