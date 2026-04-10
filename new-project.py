@@ -357,7 +357,7 @@ module.exports = router;
         "scripts": {
             "ng": "ng",
             "start": "ng serve",
-            "build": f"node -e \\\"const fs = require('fs'); const file = 'src/app/services/api.service.ts'; let c = fs.readFileSync(file, 'utf8'); c = c.replace('__PRODUCTION__', process.env.PRODUCTION || 'false').replace('__PROD_BACKEND_URL__', process.env.PROD_BACKEND_URL || '').replace('__PROD_FRONTEND_URL__', process.env.PROD_FRONTEND_URL || ''); fs.writeFileSync(file, c);\\\" && ng build && node -e \\\"const fs = require('fs'); const src = 'dist/frontend/browser'; const dest = 'dist/frontend'; if (fs.existsSync(src)) {{ fs.cpSync(src, dest, {{recursive: true}}); fs.rmSync(src, {{recursive: true}}); }}\\\"",
+            "build": "node scripts/build-tasks.js prebuild && ng build && node scripts/build-tasks.js postbuild",
             "watch": "ng build --watch --configuration development",
             "test": "vitest"
         },
@@ -520,6 +520,37 @@ export class ApiService {{
     return this.http.post<T>(`${{this.apiUrl}}/${{endpoint}}`, body);
   }}
 }}
+"""
+
+    fe_build_tasks_js = """const fs = require('fs');
+const path = require('path');
+
+function replaceEnv() {
+  const file = path.join(__dirname, '..', 'src', 'app', 'services', 'api.service.ts');
+  if (!fs.existsSync(file)) return;
+
+  let content = fs.readFileSync(file, 'utf8');
+  content = content
+    .replace('__PRODUCTION__', process.env.PRODUCTION || 'false')
+    .replace('__PROD_BACKEND_URL__', process.env.PROD_BACKEND_URL || '')
+    .replace('__PROD_FRONTEND_URL__', process.env.PROD_FRONTEND_URL || '');
+
+  fs.writeFileSync(file, content);
+}
+
+function normalizeOutput() {
+  const src = path.join(__dirname, '..', 'dist', 'frontend', 'browser');
+  const dest = path.join(__dirname, '..', 'dist', 'frontend');
+
+  if (fs.existsSync(src)) {
+    fs.cpSync(src, dest, { recursive: true });
+    fs.rmSync(src, { recursive: true });
+  }
+}
+
+const task = process.argv[2];
+if (task === 'prebuild') replaceEnv();
+else if (task === 'postbuild') normalizeOutput();
 """
 
     # --- Frontend Tooling Templates ---
@@ -849,6 +880,10 @@ export class HomeComponent implements OnInit {{
     (frontend_root / "package.json").write_text(json.dumps(fe_package_json, indent=2), encoding='utf-8')
     (frontend_root / "angular.json").write_text(json.dumps(fe_angular_json, indent=2), encoding='utf-8')
     (frontend_root / "tsconfig.json").write_text(json.dumps(fe_tsconfig_json, indent=2), encoding='utf-8')
+    
+    scripts_dir = frontend_root / "scripts"
+    scripts_dir.mkdir()
+    (scripts_dir / "build-tasks.js").write_text(fe_build_tasks_js, encoding='utf-8')
     (frontend_root / "tsconfig.app.json").write_text(json.dumps({
         "extends": "./tsconfig.json",
         "compilerOptions": { "outDir": "./out-tsc/app", "types": [] },
