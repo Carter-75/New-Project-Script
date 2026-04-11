@@ -1261,17 +1261,22 @@ def sync_vercel_env():
                     val = val[1:-1]
                 
                 if key and val:
+                    # Sync logic using PowerShell for robust escaping on Windows
+                    # We pass the value via an environment variable to ensure zero shell interpolation
+                    target_env = os.environ.copy()
+                    target_env["KV_VAL"] = val
+
                     # 1. Try to remove existing var (ignore failure if it doesn't exist)
                     subprocess.run(
-                        ["npx.cmd", "vercel", "env", "rm", key, "production", "--yes"],
-                        shell=False,
+                        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"npx vercel env rm {key} production --yes"],
+                        env=target_env,
                         capture_output=True
                     )
                     
-                    # 2. Add/Update the variable
+                    # 2. Add/Update the variable using the env var for the value
                     result = subprocess.run(
-                        ["npx.cmd", "vercel", "env", "add", key, "production", "--value", val, "--yes"],
-                        shell=False,
+                        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"npx vercel env add {key} production --value $env:KV_VAL --yes"],
+                        env=target_env,
                         capture_output=True,
                         text=True
                     )
