@@ -246,14 +246,14 @@ app.use(cookieParser());
 const isProd = process.env.PRODUCTION === 'true';
 const prodUrl = process.env.PROD_FRONTEND_URL;
 
-const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${process.env.PORT || '{be_port}'}`];
-if (prodUrl) {{
+const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${process.env.PORT || '""" + be_port + """'}`];
+if (prodUrl) {
   frameAncestors.push(prodUrl);
-}}
-if (process.env.PROD_BACKEND_URL) {{
+}
+if (process.env.PROD_BACKEND_URL) {
   frameAncestors.push(process.env.PROD_BACKEND_URL);
-}}
-
+}
+ 
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -262,7 +262,7 @@ app.use(helmet({
     },
   },
 }));
-
+ 
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'ALLOWALL'); // For compatibility
   next();
@@ -473,53 +473,47 @@ export const appConfig: ApplicationConfig = {
 
 
     # --- ApiService Template (Simplified & General) ---
-    fe_api_service_ts = f"""import {{ Injectable, inject }} from '@angular/core';
-import {{ HttpClient }} from '@angular/common/http';
-import {{ Observable }} from 'rxjs';
+    fe_api_service_ts = """import { Injectable, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { Observable } from 'rxjs';
 
-@Injectable({{
+@Injectable({
   providedIn: 'root'
-}})
-export class ApiService {{
+})
+export class ApiService {
   private http = inject(HttpClient);
   
   // Dynamic API URL mapping
-  private get apiUrl(): string {{
-    // Environmental "Burn-In" Toggles
+  private get apiUrl(): string {
     const isProd = ('__PRODUCTION__' as string) === 'true';
     const prodBackend = '__PROD_BACKEND_URL__' as string;
     
-    const host = window.location.hostname;
-    const isLocal = host === 'localhost' || host === '127.0.0.1';
-    
-    // 1. If we are local and not forced into production mode, hit the raw local port
-    if (isLocal && !isProd) {{
-      return 'http://localhost:{be_port}/api';
-    }}
+    // In production, use the absolute URL if provided
+    if (isProd) {
+      if (prodBackend && prodBackend !== '' && !prodBackend.includes('__PROD_')) {
+        return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
+      }
+    }
 
-    // 2. If we are in production (or forced), prioritize the explicit backend URL from env
-    if (prodBackend && prodBackend !== '' && !prodBackend.includes('__PROD_')) {{
-      return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
-    }}
-
-    // 3. Fallback: Use the universal relative path (handled by Vercel Proxy)
+    // In development and as a production fallback, use relative /api.
+    // The dev-launcher handles the local proxy mapping.
     return '/api';
-  }}
+  }
 
   /**
    * Universal GET wrapper
    */
-  getData<T>(endpoint: string): Observable<T> {{
-    return this.http.get<T>(`${{this.apiUrl}}/${{endpoint}}`);
-  }}
+  getData<T>(endpoint: string): Observable<T> {
+    return this.http.get<T>(`${this.apiUrl}/${endpoint}`);
+  }
 
   /**
    * Universal POST wrapper
    */
-  postData<T>(endpoint: string, body: any): Observable<T> {{
-    return this.http.post<T>(`${{this.apiUrl}}/${{endpoint}}`, body);
-  }}
-}}
+  postData<T>(endpoint: string, body: any): Observable<T> {
+    return this.http.post<T>(`${this.apiUrl}/${endpoint}`, body);
+  }
+}
 """
 
     fe_build_tasks_js = """const fs = require('fs');
@@ -551,6 +545,107 @@ function normalizeOutput() {
 const task = process.argv[2];
 if (task === 'prebuild') replaceEnv();
 else if (task === 'postbuild') normalizeOutput();
+"""
+
+    root_dev_launcher_js = """const net = require('net');
+const fs = require('fs');
+const path = require('path');
+const { spawn } = require('child_process');
+
+function isPortAvailable(port) {
+  const check = (host) => new Promise((resolve) => {
+    const server = net.createServer();
+    server.on('error', () => resolve(false));
+    server.listen(port, host, () => {
+      server.close(() => resolve(true));
+    });
+  });
+  
+  return (async () => {
+    if (!(await check('0.0.0.0'))) return false;
+    if (!(await check('::'))) return false;
+    return true;
+  })();
+}
+
+async function getAvailablePort(startPort, name) {
+  let port = parseInt(startPort);
+  while (!(await isPortAvailable(port))) {
+    console.log(`[Port Conflict] ${name} port ${port} is in use. Trying ${port + 1}...`);
+    port++;
+  }
+  return port;
+}
+
+function parseEnv(filePath) {
+  if (!fs.existsSync(filePath)) return {};
+  const content = fs.readFileSync(filePath, 'utf8');
+  const env = {};
+  content.split(/\\r?\\n/).forEach(line => {
+    const trimmedLine = line.trim();
+    if (!trimmedLine || trimmedLine.startsWith('#')) return;
+    
+    const [key, ...valueParts] = trimmedLine.split('=');
+    if (key && valueParts.length > 0) {
+      env[key.trim()] = valueParts.join('=').trim();
+    }
+  });
+  return env;
+}
+
+async function main() {
+  const envPath = path.join(process.cwd(), '.env.local');
+  const env = parseEnv(envPath);
+
+  const defaultBePort = env.PORT || '3000';
+  const defaultFePort = env.FRONTEND_PORT || '4200';
+
+  console.log('Initializing Smart Dev Launcher (Ephemeral Mode)...');
+
+  const finalBePort = await getAvailablePort(defaultBePort, 'Backend');
+  const finalFePort = await getAvailablePort(defaultFePort, 'Frontend');
+
+  const proxyConfig = {
+    "/api": {
+      "target": `http://localhost:${finalBePort}`,
+      "secure": false,
+      "changeOrigin": true
+    }
+  };
+  
+  const proxyPath = path.join(process.cwd(), 'frontend', 'proxy.conf.json');
+  fs.writeFileSync(proxyPath, JSON.stringify(proxyConfig, null, 2));
+  console.log(`[Success] Generated temporary proxy: /api -> port ${finalBePort}`);
+
+  const devArgs = [
+    'concurrently',
+    '--kill-others',
+    '--prefix-colors', "blue,magenta",
+    '--names', "backend,frontend",
+    `"node backend/bin/www"`,
+    `"cd frontend && npx ng serve --port ${finalFePort} --proxy-config proxy.conf.json"`
+  ];
+
+  console.log(`Backend: http://localhost:${finalBePort}`);
+  console.log(`Frontend: http://localhost:${finalFePort}`);
+  console.log('---');
+
+  const child = spawn('npx', devArgs, {
+    stdio: 'inherit',
+    shell: true,
+    env: { ...process.env, PORT: finalBePort, FRONTEND_PORT: finalFePort }
+  });
+
+  child.on('exit', (code) => {
+    try { fs.unlinkSync(proxyPath); } catch (e) {}
+    process.exit(code);
+  });
+}
+
+main().catch(err => {
+  console.error('[Error] Launcher Error:', err);
+  process.exit(1);
+});
 """
 
     # --- Frontend Tooling Templates ---
@@ -631,21 +726,14 @@ A full-stack MEAN application (MongoDB, Express, Angular, Node) generated with a
 - **Security**: Iframe protection for portfolio embedding
 - **Interactive**: Matter.js physics and Anime.js animations
 
-## Getting Started
+## Development
 
 ### 1. Configure Environment
-A `.env.local` file is located at the root. Update your `MONGODB_URI` if needed.
+Ensure your `.env.local` file is updated with your `MONGODB_URI`.
 
-### 2. Run Backend
+### 2. Launch Full Stack
 ```bash
-cd backend
-npm start
-```
-
-### 3. Run Frontend
-```bash
-cd frontend
-npm start
+npm run dev
 ```
 """
 
@@ -654,7 +742,7 @@ npm start
     if use_matter or use_anime or use_confetti:
         imports_list.extend(["viewChild", "ElementRef", "afterNextRender", "OnDestroy"])
     
-    physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\nimport {{ ApiService }} from './services/api.service';\n"
+    physics_imports = f"import {{ {', '.join(imports_list)} }} from '@angular/core';\nimport {{ ApiService }} from '../services/api.service';\n"
     if use_matter: physics_imports += "import * as Matter from 'matter-js';\n"
     if use_anime: physics_imports += "import anime from 'animejs';\n"
     if use_confetti: physics_imports += "import confetti from 'canvas-confetti';\n"
@@ -781,7 +869,7 @@ export class HomeComponent implements OnInit {{
   protected readonly title = signal('{project_name}');
   
   ngOnInit() {{
-    this.api.getData('ping').subscribe(res => console.log('API Status:', res));
+    this.api.getData('ping').subscribe((res: any) => console.log('API Status:', res));
   }}
 
   {physics_logic}
@@ -946,6 +1034,25 @@ PROD_FRONTEND_URL=
     (project_root / ".env.local").write_text(env_content, encoding='utf-8')
 
     # --- Root Files ---
+    root_package_json = {
+        "name": project_slug,
+        "version": "1.0.0",
+        "scripts": {
+            "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
+            "dev:backend": "cd backend && npm run dev",
+            "dev:frontend": "cd frontend && npm start",
+            "dev": "node scripts/dev-launcher.js",
+            "build": "cd frontend && npm run build && cd ../backend && npm install --production",
+            "start": "cd backend && npm start"
+        },
+        "devDependencies": {
+            "concurrently": "^8.2.2"
+        }
+    }
+    (project_root / "package.json").write_text(json.dumps(root_package_json, indent=2), encoding='utf-8')
+    scripts_root = (project_root / "scripts")
+    scripts_root.mkdir(exist_ok=True)
+    (scripts_root / "dev-launcher.js").write_text(root_dev_launcher_js, encoding='utf-8')
     (project_root / ".gitignore").write_text("node_modules/\ndist/\n.env.local\n.angular/\n.vscode/\n", encoding='utf-8')
     (project_root / "README.md").write_text(fe_readme, encoding='utf-8')
 
@@ -1111,7 +1218,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                         "--value", existing_env[key], "--non-interactive", "--yes"
                     ], cwd=project_root, shell=True)
                     vars_added += 1
-            print(f"✅ Vercel Vault synced successfully ({vars_added} variables added).")
+            print(f"[Success] Vercel Vault synced successfully ({vars_added} variables added).")
 
         except subprocess.CalledProcessError as e:
             print(f"Warning: Vercel preparation encountered an issue: {e}")
@@ -1173,7 +1280,7 @@ if __name__ == "__main__":
 # Vercel Watcher Hook
 # Syncs local .env.local to Vercel Vault before every push.
 
-echo \"🚀 Vercel Watcher: Checking environment status...\"
+echo \"Vercel Watcher: Checking environment status...\"
 python sync-env.py
 
 # Always allow the push to continue
@@ -1195,12 +1302,19 @@ exit 0
         print("Success: Dependencies installed successfully.")
     except Exception as e:
         print(f"Warning: npm install failed: {e}")
+    
+    # Root install for concurrently
+    try:
+        print(f"[{project_name}] Root npm install (concurrently)...")
+        subprocess.run(["npm", "install"], cwd=project_root, check=True, shell=True)
+    except Exception as e:
+        print(f"Warning: root npm install failed: {e}")
 
     print("\nProject creation complete!")
     print(f"Location: {project_root}")
     print("\nNext steps:")
-    print(f"  cd {project_name}/backend ; npm start")
-    print(f"  cd {project_name}/frontend ; npm start")
+    print(f"  cd {project_name}")
+    print(f"  npm run dev")
 
 if __name__ == "__main__":
     main()
