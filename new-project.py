@@ -556,14 +556,16 @@ function isPortAvailable(port) {
   const check = (host) => new Promise((resolve) => {
     const server = net.createServer();
     server.on('error', () => resolve(false));
-    server.listen(port, host, () => {
+    server.listen({ port, host, exclusive: true }, () => {
       server.close(() => resolve(true));
     });
   });
   
   return (async () => {
-    if (!(await check('0.0.0.0'))) return false;
-    if (!(await check('::'))) return false;
+    const hosts = ['0.0.0.0', '::', '127.0.0.1', '::1'];
+    for (const host of hosts) {
+      if (!(await check(host))) return false;
+    }
     return true;
   })();
 }
