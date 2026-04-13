@@ -172,59 +172,60 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
 
+// Environment Detection
+const isProduction = process.env.PRODUCTION === 'true' ||
+                   process.env.VERCEL === '1' ||
+                   process.env.NODE_ENV === 'production';
+
 const app = express();
 
-require('dotenv').config({ path: require('path').join(__dirname, '../.env.local') });
-
-// --- Diagnostic Routes (Moved up for early availability) ---
+// --- Diagnostic Routes ---
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
     cwd: process.cwd(),
     dirname: __dirname,
-    env: process.env.PRODUCTION === 'true' ? 'production' : 'development',
+    env: isProduction ? 'production' : 'development',
+    dbStatus: mongoose.connection.readyState,
     timestamp: new Date().toISOString()
   });
 });
 
-app.get('/api/debug-bundle', async (req, res) => {
-  const fs = require('fs').promises;
-  async function listFiles(dir) {
-    let results = [];
-    const list = await fs.readdir(dir, { withFileTypes: true });
-    for (const file of list) {
-      const res = path.resolve(dir, file.name);
-      if (file.isDirectory()) {
-        results.push({ name: file.name, type: 'dir', children: await listFiles(res) });
-      } else {
-        results.push({ name: file.name, type: 'file' });
+// Debug route — dev-only (exposes filesystem tree)
+if (!isProduction) {
+  app.get('/api/debug-bundle', async (req, res) => {
+    const fsPromises = require('fs').promises;
+    async function listFiles(dir) {
+      let results = [];
+      const list = await fsPromises.readdir(dir, { withFileTypes: true });
+      for (const file of list) {
+        const filePath = path.resolve(dir, file.name);
+        if (file.isDirectory()) {
+          results.push({ name: file.name, type: 'dir', children: await listFiles(filePath) });
+        } else {
+          results.push({ name: file.name, type: 'file' });
+        }
       }
+      return results;
     }
-    return results;
-  }
-  try {
-    const root = await listFiles(process.cwd());
-    res.json({ root });
-  } catch (err) {
-    res.status(500).json({ error: err.message, stack: err.stack });
-  }
-});
-
-let aiRouter;
-try {
-  // We assume aiRouter might be added later or exist in certain flavors
-  // For the general template, we'll keep it as a placeholder or empty
-} catch (err) {
-  console.error('FATAL: Failed to load aiRouter:', err);
+    try {
+      const root = await listFiles(process.cwd());
+      res.json({ root });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 }
 
 const indexRouter = require('./routes/index');
+// Optional: Mount an AI router if one exists
+// const aiRouter = require('./routes/ai');
 
-const PROJECT_NAME = process.env.PROJECT_NAME || 'Portfolio Project';
+const PROJECT_NAME = process.env.PROJECT_NAME || 'MEAN Project';
 
 // --- MongoDB Setup ---
 const mongoURI = process.env.MONGODB_URI;
-    if (mongoURI) {
+if (mongoURI) {
   mongoose.connect(mongoURI)
     .then(() => console.log('OK: Connected to MongoDB'))
     .catch(err => {
@@ -242,8 +243,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-// --- Portfolio Iframe Security ---
-const isProd = process.env.PRODUCTION === 'true';
+// --- Iframe Security ---
 const prodUrl = process.env.PROD_FRONTEND_URL;
 
 const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${process.env.PORT || '""" + be_port + """'}`];
@@ -273,15 +273,16 @@ app.get('/', (req, res) => {
 });
 
 app.use('/api', indexRouter);
-if (aiRouter) {
-  app.use('/api/ai', aiRouter);
-}
 
-// Error handler
+// Error handler (Hardened for Production JSON output)
 app.use((err, req, res, next) => {
-  res.status(err.status || 500).json({
+  const status = err.status || 500;
+  console.error(`ERROR ${status}:`, err.message);
+  res.status(status).json({
+    status: 'error',
     message: err.message,
-    error: req.app.get('env') === 'development' ? err : {}
+    code: status,
+    diagnostic: isProduction ? undefined : { stack: err.stack }
   });
 });
 
@@ -435,7 +436,32 @@ module.exports = {
     "./src/**/*.{html,ts}",
   ],
   theme: {
-    extend: {},
+    extend: {
+      keyframes: {
+        fadeIn: {
+          'from': { opacity: '0', transform: 'translateY(20px)' },
+          'to': { opacity: '1', transform: 'translateY(0)' },
+        },
+        scaleIn: {
+          'from': { opacity: '0', transform: 'scale(0.92)' },
+          'to': { opacity: '1', transform: 'scale(1)' },
+        },
+        slideInLeft: {
+          'from': { opacity: '0', transform: 'translateX(-30px)' },
+          'to': { opacity: '1', transform: 'translateX(0)' },
+        },
+        slideInRight: {
+          'from': { opacity: '0', transform: 'translateX(30px)' },
+          'to': { opacity: '1', transform: 'translateX(0)' },
+        }
+      },
+      animation: {
+        'fade-in': 'fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        'scaleIn': 'scaleIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        'slideInLeft': 'slideInLeft 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        'slideInRight': 'slideInRight 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+      }
+    },
   },
   plugins: [],
 }
@@ -624,7 +650,7 @@ async function main() {
     '--kill-others',
     '--prefix-colors', "blue,magenta",
     '--names', "backend,frontend",
-    `"node backend/bin/www"`,
+    `"npx nodemon backend/bin/www"`,
     `"cd frontend && npx ng serve --port ${finalFePort} --proxy-config proxy.conf.json"`
   ];
 
@@ -963,9 +989,6 @@ export class HomeComponent implements OnInit {{
         }
         (backend_root / "vercel.json").write_text(json.dumps(be_vercel_json, indent=2), encoding='utf-8')
 
-    # --- Write Frontend ---
-    (frontend_root / "package.json").write_text(json.dumps(fe_package_json, indent=2), encoding='utf-8')
-    (frontend_root / "angular.json").write_text(json.dumps(fe_angular_json, indent=2), encoding='utf-8')
     # --- Write Frontend Configs ---
     (frontend_root / "package.json").write_text(json.dumps(fe_package_json, indent=2), encoding='utf-8')
     (frontend_root / "angular.json").write_text(json.dumps(fe_angular_json, indent=2), encoding='utf-8')
@@ -1031,6 +1054,10 @@ PRODUCTION=false
 # Update your vercel.json 'destination' to match the production URL after deployment!
 PROD_BACKEND_URL=
 PROD_FRONTEND_URL=
+
+# --- API Keys (Replace with your own) ---
+OPENAI_API_KEY=
+# STRIPE_SECRET_KEY=
 """
     # Note: We write this again later after Vercel initialization to ensure it's preserved.
     (project_root / ".env.local").write_text(env_content, encoding='utf-8')
@@ -1040,15 +1067,20 @@ PROD_FRONTEND_URL=
         "name": project_slug,
         "version": "1.0.0",
         "scripts": {
+            "postinstall": "cd frontend && npm install && cd ../backend && npm install",
             "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
             "dev:backend": "cd backend && npm run dev",
             "dev:frontend": "cd frontend && npm start",
             "dev": "node scripts/dev-launcher.js",
-            "build": "cd frontend && npm run build && cd ../backend && npm install --production",
+            "build:frontend": "cd frontend && npm run build",
+            "build:backend": "cd backend && npm install --production",
+            "build": "npm run build:frontend && npm run build:backend",
             "start": "cd backend && npm start"
         },
         "devDependencies": {
-            "concurrently": "^8.2.2"
+            "concurrently": "^8.2.2",
+            "dotenv": "^17.4.2",
+            "nodemon": "^3.1.0"
         }
     }
     (project_root / "package.json").write_text(json.dumps(root_package_json, indent=2), encoding='utf-8')
