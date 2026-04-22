@@ -105,6 +105,12 @@ def main():
         options=["Agents.md", "Cursor", "Claude", "None"]
     )
 
+    auth_choice = ask_input(
+        "Authentication Type",
+        default="None",
+        options=["None", "Local", "Google", "Both"]
+    )
+
     fe_hosting = ask_input(
         "Frontend Hosting",
         default="vercel",
@@ -131,6 +137,34 @@ def main():
     print(f"\nCreating project '{project_name}' in {project_root}...")
 
     # --- Backend Templates ---
+    be_dependencies = {
+        "express": "^4.19.2",
+        "cors": "^2.8.5",
+        "cookie-parser": "~1.4.6",
+        "debug": "~2.6.9",
+        "morgan": "~1.10.0",
+        "mongoose": "^8.0.0",
+        "helmet": "^7.1.0",
+        "dotenv": "^16.4.5",
+        "openai": "^4.55.0",
+        "ws": "^8.18.0",
+        "zod": "^3.23.8"
+    }
+
+    if auth_choice in ["Local", "Both"]:
+        be_dependencies.update({
+            "express-session": "^1.18.0",
+            "passport": "^0.7.0",
+            "passport-local": "^1.0.0",
+            "bcryptjs": "^2.4.3"
+        })
+    
+    if auth_choice in ["Google", "Both"]:
+        be_dependencies.update({
+            "google-auth-library": "^9.10.0",
+            "jsonwebtoken": "^9.0.2"
+        })
+
     be_package_json = {
         "name": f"{project_name}-backend",
         "version": "1.0.0",
@@ -138,42 +172,30 @@ def main():
             "start": "node ./bin/www",
             "dev": "nodemon ./bin/www"
         },
-        "dependencies": {
-            "express": "^4.19.2",
-            "cors": "^2.8.5",
-            "cookie-parser": "~1.4.6",
-            "debug": "~2.6.9",
-            "morgan": "~1.10.0",
-            "mongoose": "^8.0.0",
-            "helmet": "^7.1.0",
-            "dotenv": "^16.4.5",
-            "openai": "^4.55.0",
-            "ws": "^8.18.0",
-            "zod": "^3.23.8"
-        },
+        "dependencies": be_dependencies,
         "devDependencies": {
             "nodemon": "^3.1.0"
         }
     }
 
-    be_app_js = """// --- Environment and Dependencies ---
+
+    be_app_js = f"""// --- Environment and Dependencies ---
 const path = require('path');
 const fs = require('fs');
 const dns = require('node:dns');
-// Set servers to public DNS for reliable Atlas resolution
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-const resolveEnvPath = () => {
+const resolveEnvPath = () => {{
   const candidates = [
     path.join(process.cwd(), '.env.local'), 
     path.join(process.cwd(), 'backend', '.env.local'),
     path.join(__dirname, '../.env.local')
   ];
-  for (const c of candidates) { if (fs.existsSync(c)) return c; }
+  for (const c of candidates) {{ if (fs.existsSync(c)) return c; }}
   return null;
-};
+}};
 const envPath = resolveEnvPath();
-if (envPath) require('dotenv').config({ path: envPath });
+if (envPath) require('dotenv').config({{ path: envPath }});
 else require('dotenv').config();
 
 const express = require('express');
@@ -182,109 +204,114 @@ const logger = require('morgan');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
-
-// Environment Detection
-const isProduction = process.env.PRODUCTION === 'true' ||
-                   process.env.VERCEL === '1' ||
-                   process.env.NODE_ENV === 'production';
+{ "const session = require('express-session');" if auth_choice in ["Local", "Both"] else "" }
+{ "const passport = require('passport');" if auth_choice in ["Local", "Both"] else "" }
 
 const app = express();
 
-// --- Models & Routers (Registered early for stability) ---
+// --- Configuration ---
+const isProd = process.env.PRODUCTION === 'true' || process.env.VERCEL === '1';
+const prodUrl = process.env.PROD_FRONTEND_URL;
+const PROJECT_NAME = process.env.PROJECT_NAME || '{project_name}';
+
+// Trust proxy for secure cookies on Vercel
+if (isProd) {{
+  app.set('trust proxy', 1);
+}}
+
+// Frame Ancestors for Iframe Security
+const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${{process.env.PORT || '{be_port}'}}`];
+
+if (prodUrl) frameAncestors.push(prodUrl);
+if (process.env.PROD_BACKEND_URL) frameAncestors.push(process.env.PROD_BACKEND_URL);
+
+// --- Models & Passport Config ---
+{ "require('./config/passport')(passport);" if auth_choice in ["Local", "Both"] else "" }
+
+// --- Routers ---
 const indexRouter = require('./routes/index');
+{ "const authRouter = require('./routes/auth');" if auth_choice != "None" else "" }
 
 // --- Diagnostic Routes ---
-app.get('/api/health', (req, res) => {
-  res.json({
+app.get('/api/health', async (req, res) => {{
+  const isConnected = mongoose.connection.readyState === 1;
+  res.json({{
     status: 'online',
-    dbStatus: mongoose.connection.readyState,
-    env: isProduction ? 'production' : 'development',
+    database: isConnected ? 'Connected' : 'Disconnected',
+    env: isProd ? 'production' : 'development',
     timestamp: new Date().toISOString()
-  });
-});
-
-// Debug route — dev-only
-if (!isProduction) {
-  app.get('/api/debug-bundle', async (req, res) => {
-    const fsPromises = require('fs').promises;
-    async function listFiles(dir) {
-      let results = [];
-      const list = await fsPromises.readdir(dir, { withFileTypes: true });
-      for (const file of list) {
-        const filePath = path.resolve(dir, file.name);
-        if (file.isDirectory()) {
-          results.push({ name: file.name, type: 'dir', children: await listFiles(filePath) });
-        } else {
-          results.push({ name: file.name, type: 'file' });
-        }
-      }
-      return results;
-    }
-    try {
-      const root = await listFiles(process.cwd());
-      res.json({ root });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-}
-
-const PROJECT_NAME = process.env.PROJECT_NAME || 'MEAN Project';
+  }});
+}});
 
 // --- MongoDB Setup ---
 const mongoURI = process.env.MONGODB_URI;
-if (mongoURI) {
-  mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 })
+if (mongoURI) {{
+  mongoose.connect(mongoURI, {{ serverSelectionTimeoutMS: 5000 }})
     .then(() => console.log('OK: Connected to MongoDB'))
-    .catch(err => {
-      console.error('WARN: MongoDB Connection Error (Graceful):', err.message);
-    });
-}
+    .catch(err => console.error('WARN: MongoDB Connection Error:', err.message));
+}}
 
 // --- Middlewares ---
-app.use(cors());
-app.use(logger('dev'));
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser());
-
-// --- Security ---
-const prodUrl = process.env.PROD_FRONTEND_URL;
-const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://*.vercel.app", `http://localhost:${process.env.PORT || '""" + be_port + """'}`];
-if (prodUrl) frameAncestors.push(prodUrl);
- 
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
+app.use(helmet({{
+  contentSecurityPolicy: {{
+    directives: {{
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
       "frame-ancestors": frameAncestors,
-    },
-  },
-}));
+    }},
+  }},
+}}));
 
-app.use((req, res, next) => {
+app.use((req, res, next) => {{
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
-});
+}});
 
-app.get('/', (req, res) => {
-  res.send(`API for ${PROJECT_NAME} is running at /api`);
-});
+app.use(cors({{
+  origin: true,
+  credentials: true
+}}));
+
+app.use(logger('dev'));
+app.use(express.json());
+app.use(express.urlencoded({{ extended: false }}));
+app.use(cookieParser());
+
+{ f'''// Sessions
+app.use(
+  session({{
+    secret: process.env.SESSION_SECRET || 'secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {{
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax'
+    }}
+  }})
+);
+
+// Passport
+app.use(passport.initialize());
+app.use(passport.session());''' if auth_choice in ["Local", "Both"] else "" }
+
+// --- Routes ---
+app.get('/', (req, res) => {{
+  res.send(`API for ${{PROJECT_NAME}} is running at /api`);
+}});
 
 app.use('/api', indexRouter);
+{ "app.use('/api/auth', authRouter);" if auth_choice != "None" else "" }
 
 // Error handler
-app.use((err, req, res, next) => {
-  const status = err.status || 500;
-  res.status(status).json({
-    status: 'error',
+app.use((err, req, res, next) => {{
+  res.status(err.status || 500).json({{
     message: err.message,
-    diagnostic: isProduction ? undefined : { stack: err.stack }
-  });
-});
+    error: isProd ? {{}} : err
+  }});
+}});
 
 module.exports = app;
 """
+
 
 
     be_www = """#!/usr/bin/env node
@@ -310,6 +337,152 @@ router.get('/', (req, res) => {
 
 module.exports = router;
 """
+
+    be_passport_js = """const LocalStrategy = require('passport-local').Strategy;
+const User = require('../models/user');
+
+module.exports = function(passport) {
+  passport.use(
+    new LocalStrategy({ usernameField: 'email' }, async (email, password, done) => {
+      try {
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user) return done(null, false, { message: 'Incorrect email or password.' });
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) return done(null, false, { message: 'Incorrect email or password.' });
+
+        return done(null, user);
+      } catch (err) {
+        return done(err);
+      }
+    })
+  );
+
+  passport.serializeUser((user, done) => done(null, user.id));
+  passport.deserializeUser(async (id, done) => {
+    try {
+      const user = await User.findById(id);
+      done(null, user);
+    } catch (err) {
+      done(err);
+    }
+  });
+};
+"""
+
+    be_user_model = """const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const userSchema = new mongoose.Schema({
+  email: { type: String, required: true, unique: true, lowercase: true },
+  password: { type: String, required: function() { return !this.googleId; } },
+  googleId: { type: String },
+  firstName: { type: String, required: true },
+  lastName: { type: String, required: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+userSchema.pre('save', async function(next) {
+  if (!this.isModified('password') || !this.password) return next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
+userSchema.methods.comparePassword = async function(candidatePassword) {
+  if (!this.password) return false;
+  return await bcrypt.compare(candidatePassword, this.password);
+};
+
+module.exports = mongoose.model('User', userSchema);
+"""
+
+    be_auth_routes = f"""const express = require('express');
+const passport = require('passport');
+const router = express.Router();
+const User = require('../models/user');
+{ "const { OAuth2Client } = require('google-auth-library');" if auth_choice in ["Google", "Both"] else "" }
+{ "const jwt = require('jsonwebtoken');" if auth_choice in ["Google", "Both"] else "" }
+
+{ "const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);" if auth_choice in ["Google", "Both"] else "" }
+
+// --- Local Auth ---
+router.post('/register', async (req, res) => {{
+  try {{
+    const {{ email, password, firstName, lastName }} = req.body;
+    let user = await User.findOne({{ email: email.toLowerCase() }});
+    if (user) return res.status(400).json({{ message: 'User already exists' }});
+
+    user = await User.create({{ email, password, firstName, lastName }});
+    req.login(user, (err) => {{
+      if (err) return res.status(500).json({{ error: err.message }});
+      res.status(201).json(user);
+    }});
+  }} catch (err) {{
+    res.status(500).json({{ error: err.message }});
+  }}
+}});
+
+router.post('/login', (req, res, next) => {{
+  passport.authenticate('local', (err, user, info) => {{
+    if (err) return next(err);
+    if (!user) return res.status(401).json({{ message: info.message }});
+    req.login(user, (err) => {{
+      if (err) return next(err);
+      res.json(user);
+    }});
+  }})(req, res, next);
+}});
+
+// --- Google Auth ---
+{ f'''router.post('/google-login', async (req, res) => {{
+  try {{
+    const {{ token }} = req.body;
+    const ticket = await client.verifyIdToken({{
+      idToken: token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    }});
+    const payload = ticket.getPayload();
+    
+    let user = await User.findOne({{ email: payload.email }});
+    if (!user) {{
+      user = await User.create({{
+        email: payload.email,
+        firstName: payload.given_name,
+        lastName: payload.family_name,
+        googleId: payload.sub
+      }});
+    }}
+
+    req.login(user, (err) => {{
+      if (err) return res.status(500).json({{ error: err.message }});
+      res.json(user);
+    }});
+  }} catch (err) {{
+    res.status(500).json({{ error: err.message }});
+  }}
+}});''' if auth_choice in ["Google", "Both"] else "" }
+
+// --- Common ---
+router.get('/user', (req, res) => {{
+  if (req.isAuthenticated()) res.json(req.user);
+  else res.status(401).json({{ message: 'Not authenticated' }});
+}});
+
+router.get('/logout', (req, res, next) => {{
+  req.logout((err) => {{
+    if (err) return next(err);
+    res.json({{ message: 'Logged out' }});
+  }});
+}});
+
+module.exports = router;
+"""
+
 
     # --- Frontend Templates (MEAN / Angular v21) ---
     fe_deps = {
@@ -497,48 +670,65 @@ export const appConfig: ApplicationConfig = {
 
 
     # --- ApiService Template (Simplified & General) ---
-    fe_api_service_ts = """import { Injectable, inject } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable } from 'rxjs';
+    fe_api_service_ts = f"""import {{ Injectable, inject, signal }} from '@angular/core';
+import {{ HttpClient }} from '@angular/common/http';
+import {{ Observable, tap }} from 'rxjs';
 
-@Injectable({
+@Injectable({{
   providedIn: 'root'
-})
-export class ApiService {
+}})
+export class ApiService {{
   private http = inject(HttpClient);
-  
+  {"public currentUser = signal<any>(null);" if auth_choice != "None" else ""}
+
   // Dynamic API URL mapping
-  private get apiUrl(): string {
+  private get apiUrl(): string {{
     const isProd = ('__PRODUCTION__' as string) === 'true';
     const prodBackend = '__PROD_BACKEND_URL__' as string;
-    
-    // In production, use the absolute URL if provided
-    if (isProd) {
-      if (prodBackend && prodBackend !== '' && !prodBackend.includes('__PROD_')) {
-        return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
-      }
-    }
-
-    // In development and as a production fallback, use relative /api.
-    // The dev-launcher handles the local proxy mapping.
+    if (isProd && prodBackend && !prodBackend.includes('__PROD_')) {{
+      return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
+    }}
     return '/api';
-  }
+  }}
 
-  /**
-   * Universal GET wrapper
-   */
-  getData<T>(endpoint: string): Observable<T> {
-    return this.http.get<T>(`${this.apiUrl}/${endpoint}`);
-  }
+  getData<T>(endpoint: string): Observable<T> {{
+    return this.http.get<T>(`${{this.apiUrl}}/${{endpoint}}`);
+  }}
 
-  /**
-   * Universal POST wrapper
-   */
-  postData<T>(endpoint: string, body: any): Observable<T> {
-    return this.http.post<T>(`${this.apiUrl}/${endpoint}`, body);
-  }
-}
+  postData<T>(endpoint: string, body: any): Observable<T> {{
+    return this.http.post<T>(`${{this.apiUrl}}/${{endpoint}}`, body);
+  }}
+
+  { f'''// --- Auth Methods ---
+  login(credentials: any): Observable<any> {{
+    return this.http.post<any>(`${{this.apiUrl}}/auth/login`, credentials).pipe(
+      tap(user => this.currentUser.set(user))
+    );
+  }}
+
+  googleLogin(token: string): Observable<any> {{
+    return this.http.post<any>(`${{this.apiUrl}}/auth/google-login`, {{ token }}).pipe(
+      tap(user => this.currentUser.set(user))
+    );
+  }}
+
+  checkStatus(): Observable<any> {{
+    return this.http.get<any>(`${{this.apiUrl}}/auth/user`).pipe(
+      tap({{
+        next: user => this.currentUser.set(user),
+        error: () => this.currentUser.set(null)
+      }})
+    );
+  }}
+
+  logout(): Observable<any> {{
+    return this.http.get<any>(`${{this.apiUrl}}/auth/logout`).pipe(
+      tap(() => this.currentUser.set(null))
+    );
+  }}''' if auth_choice != "None" else "" }
+}}
 """
+
 
     fe_build_tasks_js = """const fs = require('fs');
 const path = require('path');
@@ -908,18 +1098,34 @@ export class HomeComponent implements OnInit {{
     scene_classes = "mt-4 border rounded-lg bg-gray-50 h-[220px]" if css_choice == "tailwind" else "scene mt-4"
 
     fe_home_html = f"""<main class="{container_classes}">
-  <div #card class="{card_classes} text-center">
-    <p class="text-xs uppercase tracking-widest text-gray-500 mb-2">Portfolio Project</p>
-    <h1 class="text-4xl font-bold mb-4 font-inter">Welcome to {project_name}</h1>
-    <p class="text-gray-600 mb-6">Built with Angular v21, Node/Express, and MongoDB.</p>
+  <div #card class="{card_classes} glass text-center">
+    <div class="glass-orb absolute -top-20 -left-20 w-40 h-40 bg-blue-400/20 blur-3xl rounded-full"></div>
+    <div class="glass-orb absolute -bottom-20 -right-20 w-40 h-40 bg-purple-400/20 blur-3xl rounded-full"></div>
     
+    <p class="text-xs uppercase tracking-widest text-gray-400 mb-2 font-medium">Portfolio Showcase</p>
+    <h1 class="text-5xl font-extrabold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-blue-600 to-purple-600">
+      {project_name}
+    </h1>
+    <p class="text-gray-500 mb-8 max-w-md mx-auto leading-relaxed">
+      A high-performance MEAN application featuring standalone components, Signals, and premium interactive elements.
+    </p>
+    
+    <div class="flex gap-4 justify-center mb-10">
+      <button class="px-6 py-3 bg-blue-600 text-white rounded-full font-semibold hover:bg-blue-700 transition-all shadow-lg shadow-blue-200">
+        Get Started
+      </button>
+      <button class="px-6 py-3 bg-white text-gray-700 border border-gray-200 rounded-full font-semibold hover:bg-gray-50 transition-all">
+        View Source
+      </button>
+    </div>
 
-    <div #scene class="{scene_classes}">
-      <!-- Physics Scene -->
+    <div #scene class="{scene_classes} transform hover:scale-[1.01] transition-transform cursor-pointer">
+      <!-- Interactive Scene -->
     </div>
   </div>
 </main>
 """
+
 
     fe_index_html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -946,7 +1152,17 @@ export class HomeComponent implements OnInit {{
     (backend_root / "bin" / "www").write_text(be_www, encoding='utf-8')
     (backend_root / "routes").mkdir()
     (backend_root / "routes" / "index.js").write_text(be_routes_index, encoding='utf-8')
+    if auth_choice != "None":
+        (backend_root / "routes" / "auth.js").write_text(be_auth_routes, encoding='utf-8')
+    
     (backend_root / "models").mkdir()
+    if auth_choice != "None":
+        (backend_root / "models" / "user.js").write_text(be_user_model, encoding='utf-8')
+    
+    if auth_choice in ["Local", "Both"]:
+        (backend_root / "config").mkdir()
+        (backend_root / "config" / "passport.js").write_text(be_passport_js, encoding='utf-8')
+
     
     if fe_hosting == "vercel" or be_hosting == "vercel":
         # 1. API Bridge (for unified Vercel deployment)
@@ -1002,7 +1218,27 @@ module.exports = app;
     
     # Styles
     styles_content = "@tailwind base;\n@tailwind components;\n@tailwind utilities;\n" if css_choice == "tailwind" else "/* Global Styles */\n"
+    styles_content += """
+.glass {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  position: relative;
+  overflow: hidden;
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-20px) scale(1.05); }
+}
+
+.glass-orb {
+  animation: float 10s ease-in-out infinite;
+}
+"""
     (src_root / f"styles.{style_ext}").write_text(styles_content, encoding='utf-8')
+
     (src_root / "main.ts").write_text(fe_main_ts, encoding='utf-8')
     
     app_dir = src_root / "app"
@@ -1033,14 +1269,17 @@ MONGODB_URI=mongodb://localhost:27017/{project_name}
 PRODUCTION=false
 
 # --- Back-End Deployment ---
-# Update your vercel.json 'destination' to match the production URL after deployment!
 PROD_BACKEND_URL=
 PROD_FRONTEND_URL=
 
-# --- API Keys (Replace with your own) ---
+# --- Auth Secrets ---
+{ "SESSION_SECRET=" + (os.urandom(16).hex()) if auth_choice in ["Local", "Both"] else "" }
+{ "GOOGLE_CLIENT_ID=" if auth_choice in ["Google", "Both"] else "" }
+
+# --- API Keys ---
 OPENAI_API_KEY=
-# STRIPE_SECRET_KEY=
 """
+
     # Note: We write this again later after Vercel initialization to ensure it's preserved.
     (project_root / ".env.local").write_text(env_content, encoding='utf-8')
 
@@ -1184,11 +1423,9 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
     if fe_hosting == "vercel" or be_hosting == "vercel":
         print("\n--- Preparing Vercel Environment ---")
         try:
-            # 1. Link Project (Showing output as requested so user can see Vercel environment changes)
             print("Linking to Vercel...")
             subprocess.run(["npx", "vercel", "link", "--yes", "--project", project_slug], cwd=project_root, shell=True, check=True)
             
-            # 2. Merge our variables into .env.local (Preserving Vercel-provided tokens like VERCEL_OIDC_TOKEN)
             existing_env = {}
             env_file = project_root / ".env.local"
             if env_file.exists():
@@ -1197,7 +1434,6 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
                         k, v = line.split("=", 1)
                         existing_env[k.strip()] = v.strip()
             
-            # Update with our generated content
             for line in env_content.splitlines():
                 if "=" in line and not line.strip().startswith("#"):
                     k, v = line.split("=", 1)
@@ -1205,37 +1441,41 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
             
             # Write back the merged content
             merged_content = ""
-            # Keep original structure for our vars
             merged_content += f"PROJECT_NAME={existing_env.get('PROJECT_NAME', project_name)}\n"
             merged_content += f"PORT={existing_env.get('PORT', be_port)}\n"
             merged_content += f"FRONTEND_PORT={existing_env.get('FRONTEND_PORT', fe_port)}\n"
-            merged_content += f"MONGODB_URI={existing_env.get('MONGODB_URI', f'mongodb://localhost:27017/{project_name}')}\n\n"
+            merged_content += f"MONGODB_URI={existing_env.get('MONGODB_URI', '')}\n\n"
             merged_content += "# --- Production Configuration ---\n"
             merged_content += f"PRODUCTION={existing_env.get('PRODUCTION', 'false')}\n\n"
             merged_content += "# --- Back-End Deployment ---\n"
             merged_content += f"PROD_BACKEND_URL={existing_env.get('PROD_BACKEND_URL', '')}\n"
             merged_content += f"PROD_FRONTEND_URL={existing_env.get('PROD_FRONTEND_URL', '')}\n\n"
             
-            merged_content += "# --- Vercel Managed Variables ---\n"
+            if auth_choice in ["Local", "Both"]:
+                merged_content += f"SESSION_SECRET={existing_env.get('SESSION_SECRET', '')}\n"
+            if auth_choice in ["Google", "Both"]:
+                merged_content += f"GOOGLE_CLIENT_ID={existing_env.get('GOOGLE_CLIENT_ID', '')}\n"
+            
+            merged_content += "\n# --- Vercel Managed Variables ---\n"
             for k, v in existing_env.items():
-                if k not in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL']:
+                if k not in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID']:
                     merged_content += f"{k}={v}\n"
             
             env_file.write_text(merged_content, encoding='utf-8')
 
-            # 3. Sync .env.local variables to Vault
+            # Sync .env.local variables to Vault
             print("Syncing .env.local to Vercel Vault...")
             vars_added = 0
-            # We only sync our primary app vars, not the Vercel tokens themselves
-            sync_keys = ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL']
+            sync_keys = ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID']
             for key in sync_keys:
-                if key in existing_env:
+                if key in existing_env and existing_env[key]:
                     subprocess.run([
                         "npx", "vercel", "env", "add", key, "production", 
                         "--value", existing_env[key], "--non-interactive", "--yes"
                     ], cwd=project_root, shell=True)
                     vars_added += 1
-            print(f"[Success] Vercel Vault synced successfully ({vars_added} variables added).")
+            print(f"[Success] Vercel Vault synced successfully.")
+
 
         except subprocess.CalledProcessError as e:
             print(f"Warning: Vercel preparation encountered an issue: {e}")
