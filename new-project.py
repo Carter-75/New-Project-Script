@@ -960,7 +960,7 @@ module.exports = app;
         root_vercel_json = {
             "version": 2,
             "builds": [
-                { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "frontend/dist/frontend/browser" } },
+                { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "frontend/dist/frontend" } },
                 { "src": "api/index.js", "use": "@vercel/node" }
             ],
             "rewrites": [
