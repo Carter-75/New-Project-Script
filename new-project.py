@@ -245,13 +245,53 @@ app.get('/api/health', async (req, res) => {{
 
 // --- MongoDB Setup ---
 const mongoURI = process.env.MONGODB_URI;
-if (mongoURI) {{
-  mongoose.connect(mongoURI, {{ serverSelectionTimeoutMS: 5000 }})
-    .then(() => console.log('OK: Connected to MongoDB'))
-    .catch(err => console.error('WARN: MongoDB Connection Error:', err.message));
-}}
+
+const connectDB = async () => {{
+  if (mongoose.connection.readyState >= 1) return;
+  
+  if (!mongoURI) {{
+    console.warn('WARN: No MONGODB_URI found in environment!');
+    return;
+  }}
+
+  try {{
+    console.log('INFO: Connecting to MongoDB...');
+    await mongoose.connect(mongoURI, {{
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 10000
+    }});
+    console.log('OK: Connected to MongoDB');
+  }} catch (err) {{
+    console.error('ERROR: MongoDB Connection Failed:', err.message);
+  }}
+}};
+
+// Initial connection
+connectDB();
 
 // --- Middlewares ---
+
+// Wait for DB middleware
+const dbCheck = async (req, res, next) => {{
+  if (mongoose.connection.readyState === 1) return next();
+  if (mongoose.connection.readyState === 0) await connectDB();
+  
+  let attempts = 0;
+  const interval = setInterval(() => {{
+    attempts++;
+    if (mongoose.connection.readyState === 1) {{
+      clearInterval(interval);
+      return next();
+    }}
+    if (attempts >= 30) {{
+      clearInterval(interval);
+      return res.status(503).json({{ 
+        error: 'Database connection timeout. Please refresh or check MONGODB_URI.' 
+      }});
+    }}
+  }}, 100);
+}};
+
 app.use(helmet({{
   contentSecurityPolicy: {{
     directives: {{
@@ -265,6 +305,9 @@ app.use((req, res, next) => {{
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
 }});
+
+// Apply DB check to all /api routes
+app.use('/api', dbCheck);
 
 app.use(cors({{
   origin: true,
@@ -735,7 +778,10 @@ const path = require('path');
 
 function replaceEnv() {
   const file = path.join(__dirname, '..', 'src', 'app', 'services', 'api.service.ts');
-  if (!fs.existsSync(file)) return;
+  if (!fs.existsSync(file)) {
+    console.log('[build-tasks] Skipping env replacement: ' + file + ' not found.');
+    return;
+  }
 
   let content = fs.readFileSync(file, 'utf8');
   content = content
@@ -744,6 +790,7 @@ function replaceEnv() {
     .replace('__PROD_FRONTEND_URL__', process.env.PROD_FRONTEND_URL || '');
 
   fs.writeFileSync(file, content);
+  console.log('[build-tasks] Applied environment variables to ' + file);
 }
 
 function normalizeOutput() {
@@ -751,14 +798,48 @@ function normalizeOutput() {
   const dest = path.join(__dirname, '..', 'dist', 'frontend');
 
   if (fs.existsSync(src)) {
+    console.log('[build-tasks] Normalizing output: moving ' + src + ' to ' + dest);
     fs.cpSync(src, dest, { recursive: true });
     fs.rmSync(src, { recursive: true });
+    console.log('[build-tasks] Output normalization complete.');
+  } else {
+    console.log('[build-tasks] Skipping normalization: ' + src + ' not found.');
   }
 }
 
 const task = process.argv[2];
 if (task === 'prebuild') replaceEnv();
 else if (task === 'postbuild') normalizeOutput();
+"""
+
+    root_vercel_json = {
+        "version": 2,
+        "builds": [
+            {
+                "src": "package.json",
+                "use": "@vercel/static-build",
+                "config": { "distDir": "frontend/dist/frontend" }
+            },
+            {
+                "src": "api/index.js",
+                "use": "@vercel/node"
+            }
+        ],
+        "rewrites": [
+            {
+                "source": "/api/:path*",
+                "destination": "api/index.js"
+            },
+            {
+                "source": "/(.*)",
+                "destination": "/index.html"
+            }
+        ]
+    }
+
+    root_vercel_index = """const app = require('../backend/app');
+// Vercel Serverless Function entry point
+module.exports = app;
 """
 
     root_dev_launcher_js = """const net = require('net');
@@ -1165,25 +1246,11 @@ export class HomeComponent implements OnInit {{
 
     
     if fe_hosting == "vercel" or be_hosting == "vercel":
-        # 1. API Bridge (for unified Vercel deployment)
-        api_bridge = """const app = require('../backend/app');
-module.exports = app;
-"""
-        (project_root / "api").mkdir()
-        (project_root / "api" / "index.js").write_text(api_bridge, encoding='utf-8')
+        # 1. API Bridge / Entry Point for Vercel Functions
+        (project_root / "api").mkdir(exist_ok=True)
+        (project_root / "api" / "index.js").write_text(root_vercel_index, encoding='utf-8')
 
         # 2. Unified Vercel Configuration
-        root_vercel_json = {
-            "version": 2,
-            "builds": [
-                { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "frontend/dist/frontend/browser" } },
-                { "src": "api/index.js", "use": "@vercel/node" }
-            ],
-            "rewrites": [
-                { "source": "/api/:path*", "destination": "api/index.js" },
-                { "source": "/(.*)", "destination": "/index.html" }
-            ]
-        }
         (project_root / "vercel.json").write_text(json.dumps(root_vercel_json, indent=2), encoding='utf-8')
 
 
