@@ -156,15 +156,26 @@ def main():
         }
     }
 
-    be_app_js = """// Explicit Environment Resolution
+    be_app_js = """// --- Environment and Dependencies ---
 const path = require('path');
 const fs = require('fs');
+const dns = require('node:dns');
+// Set servers to public DNS for reliable Atlas resolution
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const resolveEnvPath = () => {
-  const candidates = [path.join(process.cwd(), '.env.local'), path.join(process.cwd(), 'backend', '.env.local')];
+  const candidates = [
+    path.join(process.cwd(), '.env.local'), 
+    path.join(process.cwd(), 'backend', '.env.local'),
+    path.join(__dirname, '../.env.local')
+  ];
   for (const c of candidates) { if (fs.existsSync(c)) return c; }
-  return candidates[0];
+  return null;
 };
-require('dotenv').config({ path: resolveEnvPath() });
+const envPath = resolveEnvPath();
+if (envPath) require('dotenv').config({ path: envPath });
+else require('dotenv').config();
+
 const express = require('express');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
@@ -179,19 +190,20 @@ const isProduction = process.env.PRODUCTION === 'true' ||
 
 const app = express();
 
+// --- Models & Routers (Registered early for stability) ---
+const indexRouter = require('./routes/index');
+
 // --- Diagnostic Routes ---
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'online',
-    cwd: process.cwd(),
-    dirname: __dirname,
-    env: isProduction ? 'production' : 'development',
     dbStatus: mongoose.connection.readyState,
+    env: isProduction ? 'production' : 'development',
     timestamp: new Date().toISOString()
   });
 });
 
-// Debug route — dev-only (exposes filesystem tree)
+// Debug route — dev-only
 if (!isProduction) {
   app.get('/api/debug-bundle', async (req, res) => {
     const fsPromises = require('fs').promises;
@@ -217,23 +229,16 @@ if (!isProduction) {
   });
 }
 
-const indexRouter = require('./routes/index');
-// Optional: Mount an AI router if one exists
-// const aiRouter = require('./routes/ai');
-
 const PROJECT_NAME = process.env.PROJECT_NAME || 'MEAN Project';
 
 // --- MongoDB Setup ---
 const mongoURI = process.env.MONGODB_URI;
 if (mongoURI) {
-  mongoose.connect(mongoURI)
+  mongoose.connect(mongoURI, { serverSelectionTimeoutMS: 5000 })
     .then(() => console.log('OK: Connected to MongoDB'))
     .catch(err => {
       console.error('WARN: MongoDB Connection Error (Graceful):', err.message);
-      console.log('INFO: Continuing without database features...');
     });
-} else {
-  console.log('INFO: No MONGODB_URI found in .env.local. Database features disabled.');
 }
 
 // --- Middlewares ---
@@ -243,16 +248,10 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 
-// --- Iframe Security ---
+// --- Security ---
 const prodUrl = process.env.PROD_FRONTEND_URL;
-
-const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${process.env.PORT || '""" + be_port + """'}`];
-if (prodUrl) {
-  frameAncestors.push(prodUrl);
-}
-if (process.env.PROD_BACKEND_URL) {
-  frameAncestors.push(process.env.PROD_BACKEND_URL);
-}
+const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://*.vercel.app", `http://localhost:${process.env.PORT || '""" + be_port + """'}`];
+if (prodUrl) frameAncestors.push(prodUrl);
  
 app.use(helmet({
   contentSecurityPolicy: {
@@ -262,9 +261,9 @@ app.use(helmet({
     },
   },
 }));
- 
+
 app.use((req, res, next) => {
-  res.setHeader('X-Frame-Options', 'ALLOWALL'); // For compatibility
+  res.setHeader('X-Frame-Options', 'ALLOWALL');
   next();
 });
 
@@ -274,20 +273,19 @@ app.get('/', (req, res) => {
 
 app.use('/api', indexRouter);
 
-// Error handler (Hardened for Production JSON output)
+// Error handler
 app.use((err, req, res, next) => {
   const status = err.status || 500;
-  console.error(`ERROR ${status}:`, err.message);
   res.status(status).json({
     status: 'error',
     message: err.message,
-    code: status,
     diagnostic: isProduction ? undefined : { stack: err.stack }
   });
 });
 
 module.exports = app;
 """
+
 
     be_www = """#!/usr/bin/env node
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env.local') });
@@ -951,43 +949,27 @@ export class HomeComponent implements OnInit {{
     (backend_root / "models").mkdir()
     
     if fe_hosting == "vercel" or be_hosting == "vercel":
-        # 1. Frontend Proxy Bridge
-        fe_vercel_json = {
-            "cleanUrls": True,
-            "trailingSlash": False,
+        # 1. API Bridge (for unified Vercel deployment)
+        api_bridge = """const app = require('../backend/app');
+module.exports = app;
+"""
+        (project_root / "api").mkdir()
+        (project_root / "api" / "index.js").write_text(api_bridge, encoding='utf-8')
+
+        # 2. Unified Vercel Configuration
+        root_vercel_json = {
+            "version": 2,
+            "builds": [
+                { "src": "package.json", "use": "@vercel/static-build", "config": { "distDir": "frontend/dist/frontend/browser" } },
+                { "src": "api/index.js", "use": "@vercel/node" }
+            ],
             "rewrites": [
-                { "source": "/api/:path*", "destination": f"https://{project_slug}-backend.vercel.app/api/:path*" },
+                { "source": "/api/:path*", "destination": "api/index.js" },
                 { "source": "/(.*)", "destination": "/index.html" }
             ]
         }
-        (frontend_root / "vercel.json").write_text(json.dumps(fe_vercel_json, indent=2), encoding='utf-8')
+        (project_root / "vercel.json").write_text(json.dumps(root_vercel_json, indent=2), encoding='utf-8')
 
-        # 2. Backend Standalone Configuration
-        be_vercel_json = {
-            "version": 2,
-            "functions": {
-                "app.js": {
-                    "maxDuration": 60,
-                    "includeFiles": "{services,models,controllers,routes}/**"
-                }
-            },
-            "rewrites": [
-                { "source": "/(.*)", "destination": "app.js" }
-            ],
-            "headers": [
-                {
-                    "source": "/(.*)",
-                    "headers": [
-                        { "key": "X-Frame-Options", "value": "ALLOWALL" },
-                        { 
-                            "key": "Content-Security-Policy", 
-                            "value": "frame-ancestors 'self' https://carter-portfolio.fyi https://carter-portfolio.vercel.app https://*.vercel.app http://localhost:3000" 
-                        }
-                    ]
-                }
-            ]
-        }
-        (backend_root / "vercel.json").write_text(json.dumps(be_vercel_json, indent=2), encoding='utf-8')
 
     # --- Write Frontend Configs ---
     (frontend_root / "package.json").write_text(json.dumps(fe_package_json, indent=2), encoding='utf-8')
@@ -1067,19 +1049,20 @@ OPENAI_API_KEY=
         "name": project_slug,
         "version": "1.0.0",
         "scripts": {
-            "postinstall": "cd frontend && npm install && cd ../backend && npm install",
-            "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install",
-            "dev:backend": "cd backend && npm run dev",
-            "dev:frontend": "cd frontend && npm start",
             "dev": "node scripts/dev-launcher.js",
-            "build:frontend": "cd frontend && npm run build",
-            "build:backend": "cd backend && npm install --production",
-            "build": "npm run build:frontend && npm run build:backend",
-            "start": "cd backend && npm start"
+            "build": "cd frontend && npm install && npm run build",
+            "postinstall": "npm install --prefix backend && npm install --prefix frontend",
+            "start": "node start-dev.js"
         },
-        "devDependencies": {
+        "dependencies": {
+            "express": "^4.19.2",
+            "mongoose": "^8.0.0",
+            "cors": "^2.8.5",
+            "dotenv": "^16.4.5",
+            "helmet": "^7.1.0",
+            "morgan": "~1.10.0",
+            "cookie-parser": "~1.4.6",
             "concurrently": "^8.2.2",
-            "dotenv": "^17.4.2",
             "nodemon": "^3.1.0"
         }
     }
@@ -1261,23 +1244,23 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
         print("Initialized Git repository.")
         
         # --- Vercel Watcher (Git Hook) ---
-        sync_env_py = """import os
+        if fe_hosting == "vercel" or be_hosting == "vercel":
+            sync_env_py = """import os
 import subprocess
 from pathlib import Path
 
 def sync_vercel_env():
     \"\"\"Reads the root .env.local and syncs each variable to the Vercel Production vault.\"\"\"
-    env_path = Path('.env.local')
+    candidates = [Path('.env.local'), Path('.env')]
+    env_path = next((c for c in candidates if c.exists()), None)
     
-    if not env_path.exists():
-        print(\"?? No .env.local file found in the root. Skipping sync.\")
+    if not env_path:
+        print(">> No environment file found. Skipping sync.")
         return
 
-    print("Vercel Watcher: Syncing local .env.local to Production Vault...")
+    print(f">> Vercel Watcher: Syncing {env_path.name} to Production Vault...")
     
     try:
-        # We assume the project is linked (via 'vercel link' or similar)
-        # The 'env add' command will handle link errors if they occur
         with open(env_path, "r", encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
@@ -1285,50 +1268,28 @@ def sync_vercel_env():
                     continue
                 
                 key, val = line.split("=", 1)
-                key = key.strip()
-                val = val.strip()
-                
-                # Strip surrounding quotes if they exist
-                if (val.startswith('"') and val.endswith('"')) or (val.startswith("'") and val.endswith("'")):
-                    val = val[1:-1]
+                key, val = key.strip(), val.strip().strip('"').strip("'")
                 
                 if key and val:
-                    # Sync logic using PowerShell for robust escaping on Windows
-                    # We pass the value via an environment variable to ensure zero shell interpolation
-                    target_env = os.environ.copy()
-                    target_env["KV_VAL"] = val
-
-                    # 1. Try to remove existing var (ignore failure if it doesn't exist)
-                    subprocess.run(
-                        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"npx vercel env rm {key} production --yes"],
-                        env=target_env,
-                        capture_output=True
-                    )
-                    
-                    # 2. Add/Update the variable using the env var for the value
+                    # Sync to Vercel (Remove & Add to update)
+                    subprocess.run(["npx", "vercel", "env", "rm", key, "production", "--yes"], shell=True, capture_output=True)
                     result = subprocess.run(
-                        ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"npx vercel env add {key} production --value $env:KV_VAL --yes"],
-                        env=target_env,
-                        capture_output=True,
-                        text=True
+                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes"],
+                        shell=True, capture_output=True, text=True
                     )
-                    
-                    if result.returncode != 0:
-                        print(f"   [!] Failed to sync {key}: {result.stderr.strip()}")
-                    else:
-                        print(f"   Synced: {key}")
+                    if result.returncode == 0: print(f"   Synced: {key}")
+                    else: print(f"   [!] Failed: {key}")
 
-        print("Vercel Vault is now up to date.")
-
+        print("OK: Vercel Vault is up to date.")
     except Exception as e:
-        print(f"Error during Vercel sync: {e}")
+        print(f"Error: {e}")
 
 if __name__ == "__main__":
     sync_vercel_env()
 """
-        (project_root / "sync-env.py").write_text(sync_env_py, encoding='utf-8')
+            (project_root / "sync-env.py").write_text(sync_env_py, encoding='utf-8')
 
-        pre_push_hook = """#!/bin/sh
+            pre_push_hook = """#!/bin/sh
 # Vercel Watcher Hook
 # Syncs local .env.local to Vercel Vault before every push.
 
@@ -1338,8 +1299,8 @@ python sync-env.py
 # Always allow the push to continue
 exit 0
 """
-        hook_path = project_root / ".git" / "hooks" / "pre-push"
-        hook_path.write_text(pre_push_hook, encoding='utf-8')
+            hook_path = project_root / ".git" / "hooks" / "pre-push"
+            hook_path.write_text(pre_push_hook, encoding='utf-8')
 
     except Exception as e:
         print(f"Warning: Git/Hook initialization issue: {e}")
