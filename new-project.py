@@ -151,18 +151,16 @@ def main():
         "zod": "^3.23.8"
     }
 
-    if auth_choice in ["Local", "Both"]:
+    if auth_choice != "None":
         be_dependencies.update({
             "express-session": "^1.18.0",
             "passport": "^0.7.0",
-            "passport-local": "^1.0.0",
             "bcryptjs": "^2.4.3"
         })
     
     if auth_choice in ["Google", "Both"]:
         be_dependencies.update({
-            "google-auth-library": "^9.10.0",
-            "jsonwebtoken": "^9.0.2"
+            "passport-google-oauth20": "^2.0.0"
         })
 
     be_package_json = {
@@ -204,8 +202,8 @@ const logger = require('morgan');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
-{ "const session = require('express-session');" if auth_choice in ["Local", "Both"] else "" }
-{ "const passport = require('passport');" if auth_choice in ["Local", "Both"] else "" }
+{ "const session = require('express-session');" if auth_choice != "None" else "" }
+{ "const passport = require('passport');" if auth_choice != "None" else "" }
 
 const app = express();
 
@@ -226,7 +224,7 @@ if (prodUrl) frameAncestors.push(prodUrl);
 if (process.env.PROD_BACKEND_URL) frameAncestors.push(process.env.PROD_BACKEND_URL);
 
 // --- Models & Passport Config ---
-{ "require('./config/passport')(passport);" if auth_choice in ["Local", "Both"] else "" }
+{ "require('./config/passport')(passport);" if auth_choice != "None" else "" }
 
 // --- Routers ---
 const indexRouter = require('./routes/index');
@@ -334,15 +332,17 @@ app.use(
 
 // Passport
 app.use(passport.initialize());
-app.use(passport.session());''' if auth_choice in ["Local", "Both"] else "" }
+app.use(passport.session());''' if auth_choice != "None" else "" }
 
-// --- Routes ---
 app.get('/', (req, res) => {{
-  res.send(`API for ${{PROJECT_NAME}} is running at /api`);
+  res.send(`API for ${{PROJECT_NAME}} is running`);
 }});
 
+// Mount at both /api and root to handle Vercel Service prefix stripping
 app.use('/api', indexRouter);
-{ "app.use('/api/auth', authRouter);" if auth_choice != "None" else "" }
+app.use('/', indexRouter);
+
+{ f"app.use('/api/auth', authRouter);\napp.use('/auth', authRouter);" if auth_choice != "None" else "" }
 
 // Error handler
 app.use((err, req, res, next) => {{
@@ -381,36 +381,72 @@ router.get('/', (req, res) => {
 module.exports = router;
 """
 
-    be_passport_js = """const LocalStrategy = require('passport-local').Strategy;
+    be_passport_js = f"""const LocalStrategy = require('passport-local').Strategy;
+{ "const GoogleStrategy = require('passport-google-oauth20').Strategy;" if auth_choice in ["Google", "Both"] else "" }
 const User = require('../models/user');
 
-module.exports = function(passport) {
-  passport.use(
-    new LocalStrategy({ usernameField: 'email' }, async (email, password, done) => {
-      try {
-        const user = await User.findOne({ email: email.toLowerCase() });
-        if (!user) return done(null, false, { message: 'Incorrect email or password.' });
-
-        const isMatch = await user.comparePassword(password);
-        if (!isMatch) return done(null, false, { message: 'Incorrect email or password.' });
-
-        return done(null, user);
-      } catch (err) {
-        return done(err);
-      }
-    })
-  );
-
+module.exports = function(passport) {{
   passport.serializeUser((user, done) => done(null, user.id));
-  passport.deserializeUser(async (id, done) => {
-    try {
+  passport.deserializeUser(async (id, done) => {{
+    try {{
       const user = await User.findById(id);
       done(null, user);
-    } catch (err) {
+    }} catch (err) {{
       done(err);
-    }
-  });
-};
+    }}
+  }});
+
+  // Local Strategy
+  passport.use(
+    new LocalStrategy({{ usernameField: 'email' }}, async (email, password, done) => {{
+      try {{
+        const user = await User.findOne({{ email: email.toLowerCase() }});
+        if (!user) return done(null, false, {{ message: 'Incorrect email or password.' }});
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) return done(null, false, {{ message: 'Incorrect email or password.' }});
+
+        return done(null, user);
+      }} catch (err) {{
+        return done(err);
+      }}
+    }})
+  );
+
+  { f'''// Google Strategy
+  passport.use(
+    new GoogleStrategy(
+      {{
+        clientID: process.env.GOOGLE_CLIENT_ID,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+        callbackURL: '/auth/google/callback',
+        proxy: true
+      }},
+      async (accessToken, refreshToken, profile, done) => {{
+        try {{
+          let user = await User.findOne({{ googleId: profile.id }});
+          if (!user) user = await User.findOne({{ email: profile.emails[0].value }});
+          
+          if (!user) {{
+            user = await User.create({{
+              googleId: profile.id,
+              email: profile.emails[0].value,
+              displayName: profile.displayName,
+              firstName: profile.name.givenName,
+              lastName: profile.name.familyName
+            }});
+          }} else if (!user.googleId) {{
+            user.googleId = profile.id;
+            await user.save();
+          }}
+          return done(null, user);
+        }} catch (err) {{
+          return done(err);
+        }}
+      }}
+    )
+  );''' if auth_choice in ["Google", "Both"] else "" }
+}};
 """
 
     be_user_model = """const mongoose = require('mongoose');
@@ -448,10 +484,7 @@ module.exports = mongoose.model('User', userSchema);
 const passport = require('passport');
 const router = express.Router();
 const User = require('../models/user');
-{ "const { OAuth2Client } = require('google-auth-library');" if auth_choice in ["Google", "Both"] else "" }
-{ "const jwt = require('jsonwebtoken');" if auth_choice in ["Google", "Both"] else "" }
-
-{ "const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);" if auth_choice in ["Google", "Both"] else "" }
+const bcrypt = require('bcryptjs');
 
 // --- Local Auth ---
 router.post('/register', async (req, res) => {{
@@ -460,7 +493,13 @@ router.post('/register', async (req, res) => {{
     let user = await User.findOne({{ email: email.toLowerCase() }});
     if (user) return res.status(400).json({{ message: 'User already exists' }});
 
-    user = await User.create({{ email, password, firstName, lastName }});
+    user = await User.create({{ 
+      email: email.toLowerCase(), 
+      password, 
+      firstName, 
+      lastName 
+    }});
+    
     req.login(user, (err) => {{
       if (err) return res.status(500).json({{ error: err.message }});
       res.status(201).json(user);
@@ -473,7 +512,7 @@ router.post('/register', async (req, res) => {{
 router.post('/login', (req, res, next) => {{
   passport.authenticate('local', (err, user, info) => {{
     if (err) return next(err);
-    if (!user) return res.status(401).json({{ message: info.message }});
+    if (!user) return res.status(401).json({{ message: info.message || 'Login failed' }});
     req.login(user, (err) => {{
       if (err) return next(err);
       res.json(user);
@@ -482,33 +521,24 @@ router.post('/login', (req, res, next) => {{
 }});
 
 // --- Google Auth ---
-{ f'''router.post('/google-login', async (req, res) => {{
-  try {{
-    const {{ token }} = req.body;
-    const ticket = await client.verifyIdToken({{
-      idToken: token,
-      audience: process.env.GOOGLE_CLIENT_ID
-    }});
-    const payload = ticket.getPayload();
-    
-    let user = await User.findOne({{ email: payload.email }});
-    if (!user) {{
-      user = await User.create({{
-        email: payload.email,
-        firstName: payload.given_name,
-        lastName: payload.family_name,
-        googleId: payload.sub
-      }});
-    }}
+{ f'''
+router.get('/google', passport.authenticate('google', {{ scope: ['profile', 'email'] }}));
 
+router.get('/google/callback', (req, res, next) => {{
+  passport.authenticate('google', (err, user, info) => {{
+    if (err || !user) {{
+      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
+      return res.redirect(`${{frontendUrl}}/login?error=google`);
+    }}
+    
     req.login(user, (err) => {{
-      if (err) return res.status(500).json({{ error: err.message }});
-      res.json(user);
+      if (err) return next(err);
+      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
+      res.redirect(`${{frontendUrl}}/dashboard`);
     }});
-  }} catch (err) {{
-    res.status(500).json({{ error: err.message }});
-  }}
-}});''' if auth_choice in ["Google", "Both"] else "" }
+  }})(req, res, next);
+}});
+''' if auth_choice in ["Google", "Both"] else "" }
 
 // --- Common ---
 router.get('/user', (req, res) => {{
@@ -727,9 +757,8 @@ export class ApiService {{
   // Dynamic API URL mapping
   private get apiUrl(): string {{
     const isProd = ('__PRODUCTION__' as string) === 'true';
-    const prodBackend = '__PROD_BACKEND_URL__' as string;
-    if (isProd && prodBackend && !prodBackend.includes('__PROD_')) {{
-      return prodBackend.endsWith('/') ? prodBackend.slice(0, -1) + '/api' : prodBackend + '/api';
+    if (isProd) {{
+      return { "'/_/backend'" if be_hosting == "vercel" else "'/api'" };
     }}
     return '/api';
   }}
@@ -749,10 +778,9 @@ export class ApiService {{
     );
   }}
 
-  googleLogin(token: string): Observable<any> {{
-    return this.http.post<any>(`${{this.apiUrl}}/auth/google-login`, {{ token }}).pipe(
-      tap(user => this.currentUser.set(user))
-    );
+  // Redirect-based Google Login
+  loginWithGoogle(): void {{
+    window.location.href = `${{this.apiUrl}}/auth/google`;
   }}
 
   checkStatus(): Observable<any> {{
@@ -764,10 +792,9 @@ export class ApiService {{
     );
   }}
 
-  logout(): Observable<any> {{
-    return this.http.get<any>(`${{this.apiUrl}}/auth/logout`).pipe(
-      tap(() => this.currentUser.set(null))
-    );
+  logout(): void {{
+    localStorage.removeItem('auth_token');
+    this.currentUser.set(null);
   }}''' if auth_choice != "None" else "" }
 }}
 """
@@ -813,28 +840,17 @@ else if (task === 'postbuild') normalizeOutput();
 """
 
     root_vercel_json = {
-        "version": 2,
-        "builds": [
-            {
-                "src": "package.json",
-                "use": "@vercel/static-build",
-                "config": { "distDir": "frontend/dist/frontend" }
+        "experimentalServices": {
+            "frontend": {
+                "entrypoint": "frontend",
+                "routePrefix": "/",
+                "framework": "angular"
             },
-            {
-                "src": "api/index.js",
-                "use": "@vercel/node"
+            "backend": {
+                "entrypoint": "backend",
+                "routePrefix": "/_/backend"
             }
-        ],
-        "rewrites": [
-            {
-                "source": "/api/:path*",
-                "destination": "api/index.js"
-            },
-            {
-                "source": "/(.*)",
-                "destination": "/index.html"
-            }
-        ]
+        }
     }
 
     root_vercel_index = """const app = require('../backend/app');
@@ -907,12 +923,17 @@ async function main() {
       "target": `http://localhost:${finalBePort}`,
       "secure": false,
       "changeOrigin": true
+    },
+    "/auth": {
+      "target": `http://localhost:${finalBePort}`,
+      "secure": false,
+      "changeOrigin": true
     }
   };
   
   const proxyPath = path.join(process.cwd(), 'frontend', 'proxy.conf.json');
   fs.writeFileSync(proxyPath, JSON.stringify(proxyConfig, null, 2));
-  console.log(`[Success] Generated temporary proxy: /api -> port ${finalBePort}`);
+  console.log(`[Success] Generated temporary proxy: /api, /auth -> port ${finalBePort}`);
 
   const devArgs = [
     'concurrently',
@@ -1144,12 +1165,16 @@ import {{ RouterOutlet }} from '@angular/router';
 export class App {{}}
 """
 
-    fe_app_routes_ts = """import { Routes } from '@angular/router';
-import { HomeComponent } from './home/home.component';
+    fe_app_routes_ts = f"""import {{ Routes }} from '@angular/router';
+import {{ HomeComponent }} from './home/home.component';
+{ "import { LoginComponent } from './login/login.component';" if auth_choice != "None" else "" }
+{ "import { DashboardComponent } from './dashboard/dashboard.component';" if auth_choice != "None" else "" }
 
 export const routes: Routes = [
-  { path: '', redirectTo: 'home', pathMatch: 'full' },
-  { path: 'home', component: HomeComponent }
+  {{ path: '', redirectTo: 'home', pathMatch: 'full' }},
+  {{ path: 'home', component: HomeComponent }},
+  { "{ path: 'login', component: LoginComponent }," if auth_choice != "None" else "" }
+  { "{ path: 'dashboard', component: DashboardComponent }," if auth_choice != "None" else "" }
 ];
 """
 
@@ -1166,7 +1191,7 @@ export class HomeComponent implements OnInit {{
   protected readonly title = signal('{project_name}');
   
   ngOnInit() {{
-    this.api.getData('ping').subscribe((res: any) => console.log('API Status:', res));
+    this.api.getData('health').subscribe((res: any) => console.log('API Status:', res));
   }}
 
   {physics_logic}
@@ -1321,6 +1346,112 @@ export class HomeComponent implements OnInit {{
     (home_dir / "home.component.html").write_text(fe_home_html, encoding='utf-8')
     (home_dir / f"home.component.{style_ext}").write_text("/* Home Styles */\n", encoding='utf-8')
 
+    if auth_choice != "None":
+        # Login Component
+        login_dir = app_dir / "login"
+        login_dir.mkdir()
+        login_ts = f"""import {{ Component, inject, signal }} from '@angular/core';
+import {{ Router }} from '@angular/router';
+import {{ ApiService }} from '../services/api.service';
+import {{ FormsModule }} from '@angular/forms';
+
+@Component({{
+  selector: 'app-login',
+  standalone: true,
+  imports: [FormsModule],
+  template: `
+    <div class="container p-4 max-w-md mx-auto min-h-screen flex items-center">
+      <div class="p-8 bg-white rounded-xl shadow-2xl border w-full glass">
+        <h2 class="text-2xl font-bold mb-6 text-center">Login</h2>
+        
+        <div class="space-y-4">
+          <button (click)="loginWithGoogle()" 
+                  class="w-full p-3 bg-white border border-gray-300 rounded-lg flex items-center justify-center hover:bg-gray-50 transition-colors">
+            <img src="https://www.google.com/favicon.ico" class="w-5 h-5 mr-2" alt="Google">
+            Sign in with Google
+          </button>
+          
+          <div class="relative flex items-center justify-center py-2">
+            <div class="border-t w-full"></div>
+            <span class="bg-white px-2 text-gray-500 text-sm absolute">or email</span>
+          </div>
+
+          <input [(ngModel)]="email" type="email" placeholder="Email" class="w-full p-3 border rounded-lg">
+          <input [(ngModel)]="password" type="password" placeholder="Password" class="w-full p-3 border rounded-lg">
+          
+          <button (click)="login()" 
+                  class="w-full p-3 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 transition-colors">
+            Sign In
+          </button>
+        </div>
+      </div>
+    </div>
+  `
+}})
+export class LoginComponent {{
+  private api = inject(ApiService);
+  private router = inject(Router);
+  email = '';
+  password = '';
+
+  login() {{
+    this.api.login({{ email: this.email, password: this.password }}).subscribe({{
+      next: () => this.router.navigate(['/dashboard']),
+      error: (err) => alert(err.error?.message || 'Login failed')
+    }});
+  }}
+
+  loginWithGoogle() {{
+    this.api.loginWithGoogle();
+  }}
+}}
+"""
+        (login_dir / "login.component.ts").write_text(login_ts, encoding='utf-8')
+
+        # Dashboard Component
+        dash_dir = app_dir / "dashboard"
+        dash_dir.mkdir()
+        dash_ts = f"""import {{ Component, inject, OnInit }} from '@angular/core';
+import {{ ApiService }} from '../services/api.service';
+import {{ Router }} from '@angular/router';
+
+@Component({{
+  selector: 'app-dashboard',
+  standalone: true,
+  template: `
+    <div class="container p-8 max-w-4xl mx-auto">
+      <div class="flex justify-between items-center mb-8">
+        <h1 class="text-3xl font-bold">Dashboard</h1>
+        <button (click)="logout()" class="text-red-600 font-semibold">Logout</button>
+      </div>
+      
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="p-6 bg-white rounded-xl shadow border glass">
+          <h3 class="text-gray-500 text-sm uppercase">User</h3>
+          <p class="text-xl font-semibold">{{{{ api.currentUser()?.email }}}}</p>
+        </div>
+      </div>
+    </div>
+  `
+}})
+export class DashboardComponent implements OnInit {{
+  public api = inject(ApiService);
+  private router = inject(Router);
+
+  ngOnInit() {{
+    this.api.checkStatus().subscribe({{
+      error: () => this.router.navigate(['/login'])
+    }});
+  }}
+
+  logout() {{
+    this.api.logout();
+    this.router.navigate(['/home']);
+  }}
+}}
+"""
+        (dash_dir / "dashboard.component.ts").write_text(dash_ts, encoding='utf-8')
+
     # Services
     services_dir = app_dir / "services"
     services_dir.mkdir()
@@ -1340,8 +1471,9 @@ PROD_BACKEND_URL=
 PROD_FRONTEND_URL=
 
 # --- Auth Secrets ---
-{ "SESSION_SECRET=" + (os.urandom(16).hex()) if auth_choice in ["Local", "Both"] else "" }
+{ "SESSION_SECRET=" + (os.urandom(16).hex()) if auth_choice in ["Local", "Both", "Google"] else "" }
 { "GOOGLE_CLIENT_ID=" if auth_choice in ["Google", "Both"] else "" }
+{ "GOOGLE_CLIENT_SECRET=" if auth_choice in ["Google", "Both"] else "" }
 
 # --- API Keys ---
 OPENAI_API_KEY=
@@ -1490,8 +1622,7 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
     if fe_hosting == "vercel" or be_hosting == "vercel":
         print("\n--- Preparing Vercel Environment ---")
         try:
-            print("Linking to Vercel...")
-            subprocess.run(["npx", "vercel", "link", "--yes", "--project", project_slug], cwd=project_root, shell=True, check=True)
+            # Merged content logic...
             
             existing_env = {}
             env_file = project_root / ".env.local"
@@ -1518,30 +1649,41 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
             merged_content += f"PROD_BACKEND_URL={existing_env.get('PROD_BACKEND_URL', '')}\n"
             merged_content += f"PROD_FRONTEND_URL={existing_env.get('PROD_FRONTEND_URL', '')}\n\n"
             
-            if auth_choice in ["Local", "Both"]:
+            if auth_choice != "None":
                 merged_content += f"SESSION_SECRET={existing_env.get('SESSION_SECRET', '')}\n"
             if auth_choice in ["Google", "Both"]:
                 merged_content += f"GOOGLE_CLIENT_ID={existing_env.get('GOOGLE_CLIENT_ID', '')}\n"
+                merged_content += f"GOOGLE_CLIENT_SECRET={existing_env.get('GOOGLE_CLIENT_SECRET', '')}\n"
             
             merged_content += "\n# --- Vercel Managed Variables ---\n"
             for k, v in existing_env.items():
-                if k not in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID']:
+                if k not in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']:
                     merged_content += f"{k}={v}\n"
             
             env_file.write_text(merged_content, encoding='utf-8')
 
-            # Sync .env.local variables to Vault
-            print("Syncing .env.local to Vercel Vault...")
+            # 1. Link the project
+            subprocess.run(["vercel", "link", "--yes"], cwd=project_root, check=True, shell=True)
+            
+            # 2. Sync variables
             vars_added = 0
-            sync_keys = ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID']
-            for key in sync_keys:
-                if key in existing_env and existing_env[key]:
-                    subprocess.run([
-                        "npx", "vercel", "env", "add", key, "production", 
-                        "--value", existing_env[key], "--non-interactive", "--yes"
-                    ], cwd=project_root, shell=True)
-                    vars_added += 1
-            print(f"[Success] Vercel Vault synced successfully.")
+            keys = list(existing_env.keys())
+            for i, key in enumerate(keys, 1):
+                if key in ['PROJECT_NAME', 'PORT', 'FRONTEND_PORT', 'MONGODB_URI', 'PRODUCTION', 'PROD_BACKEND_URL', 'PROD_FRONTEND_URL', 'SESSION_SECRET', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET']:
+                    print(f"   [{i}/{len(keys)}] Adding {key} to Vercel Vault...", end="", flush=True)
+                    # We use powershell to avoid shell escaping issues on Windows
+                    res = subprocess.run([
+                        "powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", 
+                        f"vercel env add {key} production --yes"
+                    ], cwd=project_root, input=existing_env[key], text=True, capture_output=True)
+                    
+                    if res.returncode == 0:
+                        print(" [OK]")
+                        vars_added += 1
+                    else:
+                        print(f" [FAIL] ({res.stderr.strip()})")
+            
+            print(f"[Success] {vars_added} variables synced to Vercel.")
 
 
         except subprocess.CalledProcessError as e:
@@ -1568,28 +1710,44 @@ def sync_vercel_env():
     print(f">> Vercel Watcher: Syncing {env_path.name} to Production Vault...")
     
     try:
+        env_vars = {}
         with open(env_path, "r", encoding='utf-8') as f:
             for line in f:
                 line = line.strip()
                 if not line or line.startswith("#") or "=" not in line:
                     continue
-                
                 key, val = line.split("=", 1)
-                key, val = key.strip(), val.strip().strip('"').strip("'")
-                
-                if key and val:
-                    # Sync to Vercel (Remove & Add to update)
-                    subprocess.run(["npx", "vercel", "env", "rm", key, "production", "--yes"], shell=True, capture_output=True)
-                    result = subprocess.run(
-                        ["npx", "vercel", "env", "add", key, "production", "--value", val, "--yes"],
-                        shell=True, capture_output=True, text=True
-                    )
-                    if result.returncode == 0: print(f"   Synced: {key}")
-                    else: print(f"   [!] Failed: {key}")
+                env_vars[key.strip()] = val.strip().strip('"').strip("'")
+        
+        if not env_vars:
+            print(">> Environment file is empty.")
+            return
 
-        print("OK: Vercel Vault is up to date.")
+        keys = list(env_vars.keys())
+        for i, key in enumerate(keys, 1):
+            val = env_vars[key]
+            print(f"   [{i}/{len(keys)}] Syncing {key}...", end="", flush=True)
+            
+            # 1. Remove existing
+            subprocess.run(
+                ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"vercel env rm {key} production --yes"],
+                capture_output=True
+            )
+            
+            # 2. Add new value via stdin
+            res = subprocess.run(
+                ["powershell.exe", "-ExecutionPolicy", "Bypass", "-Command", f"vercel env add {key} production --yes"],
+                input=val, text=True, capture_output=True
+            )
+            
+            if res.returncode == 0:
+                print(" [OK]")
+            else:
+                print(f" [FAIL] (Error: {res.stderr.strip()})")
+
+        print("OK: Vercel Vault updated successfully.")
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error during sync: {e}")
 
 if __name__ == "__main__":
     sync_vercel_env()
