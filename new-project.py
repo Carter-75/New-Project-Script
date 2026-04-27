@@ -59,7 +59,12 @@ def main():
     # 1. Gather Inputs
     project_name = ask_input(
         "Project Name", 
-        validation_func=lambda x: x.replace("-", "").replace("_", "").isalnum()
+        validation_func=lambda x: (
+            len(x) <= 100 and 
+            x.islower() and 
+            all(c.isalnum() or c in '._-' for c in x) and 
+            '---' not in x
+        )
     )
     project_slug = project_name.lower()
     
@@ -176,6 +181,34 @@ def main():
         }
     }
 
+    # --- Backend Template Logic ---
+    session_require = "const session = require('express-session');" if auth_choice != "None" else ""
+    passport_require = "const passport = require('passport');" if auth_choice != "None" else ""
+    passport_config_require = "require('./config/passport')(passport);" if auth_choice != "None" else ""
+    auth_router_require = "const authRouter = require('./routes/auth');" if auth_choice != "None" else ""
+    
+    session_init = ""
+    if auth_choice != "None":
+        session_init = f"""// Sessions
+app.use(
+  session({{
+    secret: process.env.SESSION_SECRET || 'secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {{
+      secure: isProd,
+      sameSite: isProd ? 'none' : 'lax'
+    }}
+  }})
+);
+
+// Passport
+app.use(passport.initialize());
+app.use(passport.session());"""
+
+    auth_mounts = ""
+    if auth_choice != "None":
+        auth_mounts = "app.use('/api/auth', authRouter);\napp.use('/auth', authRouter);"
 
     be_app_js = f"""// --- Environment and Dependencies ---
 const path = require('path');
@@ -202,8 +235,8 @@ const logger = require('morgan');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const helmet = require('helmet');
-{ "const session = require('express-session');" if auth_choice != "None" else "" }
-{ "const passport = require('passport');" if auth_choice != "None" else "" }
+{session_require}
+{passport_require}
 
 const app = express();
 
@@ -224,11 +257,11 @@ if (prodUrl) frameAncestors.push(prodUrl);
 if (process.env.PROD_BACKEND_URL) frameAncestors.push(process.env.PROD_BACKEND_URL);
 
 // --- Models & Passport Config ---
-{ "require('./config/passport')(passport);" if auth_choice != "None" else "" }
+{passport_config_require}
 
 // --- Routers ---
 const indexRouter = require('./routes/index');
-{ "const authRouter = require('./routes/auth');" if auth_choice != "None" else "" }
+{auth_router_require}
 
 // --- Diagnostic Routes ---
 app.get('/api/health', async (req, res) => {{
@@ -317,22 +350,7 @@ app.use(express.json());
 app.use(express.urlencoded({{ extended: false }}));
 app.use(cookieParser());
 
-{ f'''// Sessions
-app.use(
-  session({{
-    secret: process.env.SESSION_SECRET || 'secret',
-    resave: false,
-    saveUninitialized: false,
-    cookie: {{
-      secure: isProd,
-      sameSite: isProd ? 'none' : 'lax'
-    }}
-  }})
-);
-
-// Passport
-app.use(passport.initialize());
-app.use(passport.session());''' if auth_choice != "None" else "" }
+{session_init}
 
 app.get('/', (req, res) => {{
   res.send(`API for ${{PROJECT_NAME}} is running`);
@@ -342,7 +360,7 @@ app.get('/', (req, res) => {{
 app.use('/api', indexRouter);
 app.use('/', indexRouter);
 
-{ f"app.use('/api/auth', authRouter);\napp.use('/auth', authRouter);" if auth_choice != "None" else "" }
+{auth_mounts}
 
 // Error handler
 app.use((err, req, res, next) => {{
@@ -381,39 +399,11 @@ router.get('/', (req, res) => {
 module.exports = router;
 """
 
-    be_passport_js = f"""const LocalStrategy = require('passport-local').Strategy;
-{ "const GoogleStrategy = require('passport-google-oauth20').Strategy;" if auth_choice in ["Google", "Both"] else "" }
-const User = require('../models/user');
-
-module.exports = function(passport) {{
-  passport.serializeUser((user, done) => done(null, user.id));
-  passport.deserializeUser(async (id, done) => {{
-    try {{
-      const user = await User.findById(id);
-      done(null, user);
-    }} catch (err) {{
-      done(err);
-    }}
-  }});
-
-  // Local Strategy
-  passport.use(
-    new LocalStrategy({{ usernameField: 'email' }}, async (email, password, done) => {{
-      try {{
-        const user = await User.findOne({{ email: email.toLowerCase() }});
-        if (!user) return done(null, false, {{ message: 'Incorrect email or password.' }});
-
-        const isMatch = await user.comparePassword(password);
-        if (!isMatch) return done(null, false, {{ message: 'Incorrect email or password.' }});
-
-        return done(null, user);
-      }} catch (err) {{
-        return done(err);
-      }}
-    }})
-  );
-
-  { f'''// Google Strategy
+    google_strategy_import = "const GoogleStrategy = require('passport-google-oauth20').Strategy;" if auth_choice in ["Google", "Both"] else ""
+    
+    google_strategy_config = ""
+    if auth_choice in ["Google", "Both"]:
+        google_strategy_config = f"""// Google Strategy
   passport.use(
     new GoogleStrategy(
       {{
@@ -445,7 +435,41 @@ module.exports = function(passport) {{
         }}
       }}
     )
-  );''' if auth_choice in ["Google", "Both"] else "" }
+  );"""
+
+    be_passport_js = f"""const LocalStrategy = require('passport-local').Strategy;
+{google_strategy_import}
+const User = require('../models/user');
+
+module.exports = function(passport) {{
+  passport.serializeUser((user, done) => done(null, user.id));
+  passport.deserializeUser(async (id, done) => {{
+    try {{
+      const user = await User.findById(id);
+      done(null, user);
+    }} catch (err) {{
+      done(err);
+    }}
+  }});
+
+  // Local Strategy
+  passport.use(
+    new LocalStrategy({{ usernameField: 'email' }}, async (email, password, done) => {{
+      try {{
+        const user = await User.findOne({{ email: email.toLowerCase() }});
+        if (!user) return done(null, false, {{ message: 'Incorrect email or password.' }});
+
+        const isMatch = await user.comparePassword(password);
+        if (!isMatch) return done(null, false, {{ message: 'Incorrect email or password.' }});
+
+        return done(null, user);
+      }} catch (err) {{
+        return done(err);
+      }}
+    }})
+  );
+
+  {google_strategy_config}
 }};
 """
 
@@ -478,6 +502,27 @@ userSchema.methods.comparePassword = async function(candidatePassword) {
 };
 
 module.exports = mongoose.model('User', userSchema);
+"""
+
+    google_auth_routes = ""
+    if auth_choice in ["Google", "Both"]:
+        google_auth_routes = f"""
+router.get('/google', passport.authenticate('google', {{ scope: ['profile', 'email'] }}));
+
+router.get('/google/callback', (req, res, next) => {{
+  passport.authenticate('google', (err, user, info) => {{
+    if (err || !user) {{
+      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
+      return res.redirect(`${{frontendUrl}}/login?error=google`);
+    }}
+    
+    req.login(user, (err) => {{
+      if (err) return next(err);
+      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
+      res.redirect(`${{frontendUrl}}/dashboard`);
+    }});
+  }})(req, res, next);
+}});
 """
 
     be_auth_routes = f"""const express = require('express');
@@ -521,24 +566,7 @@ router.post('/login', (req, res, next) => {{
 }});
 
 // --- Google Auth ---
-{ f'''
-router.get('/google', passport.authenticate('google', {{ scope: ['profile', 'email'] }}));
-
-router.get('/google/callback', (req, res, next) => {{
-  passport.authenticate('google', (err, user, info) => {{
-    if (err || !user) {{
-      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
-      return res.redirect(`${{frontendUrl}}/login?error=google`);
-    }}
-    
-    req.login(user, (err) => {{
-      if (err) return next(err);
-      const frontendUrl = process.env.PROD_FRONTEND_URL || 'http://localhost:{fe_port}';
-      res.redirect(`${{frontendUrl}}/dashboard`);
-    }});
-  }})(req, res, next);
-}});
-''' if auth_choice in ["Google", "Both"] else "" }
+{google_auth_routes}
 
 // --- Common ---
 router.get('/user', (req, res) => {{
@@ -742,6 +770,34 @@ export const appConfig: ApplicationConfig = {
 
 
 
+    auth_methods = ""
+    if auth_choice != "None":
+        auth_methods = f"""// --- Auth Methods ---
+  login(credentials: any): Observable<any> {{
+    return this.http.post<any>(`${{this.apiUrl}}/auth/login`, credentials).pipe(
+      tap(user => this.currentUser.set(user))
+    );
+  }}
+
+  // Redirect-based Google Login
+  loginWithGoogle(): void {{
+    window.location.href = `${{this.apiUrl}}/auth/google`;
+  }}
+
+  checkStatus(): Observable<any> {{
+    return this.http.get<any>(`${{this.apiUrl}}/auth/user`).pipe(
+      tap({{
+        next: user => this.currentUser.set(user),
+        error: () => this.currentUser.set(null)
+      }})
+    );
+  }}
+
+  logout(): void {{
+    localStorage.removeItem('auth_token');
+    this.currentUser.set(null);
+  }}"""
+
     # --- ApiService Template (Simplified & General) ---
     fe_api_service_ts = f"""import {{ Injectable, inject, signal }} from '@angular/core';
 import {{ HttpClient }} from '@angular/common/http';
@@ -771,31 +827,7 @@ export class ApiService {{
     return this.http.post<T>(`${{this.apiUrl}}/${{endpoint}}`, body);
   }}
 
-  { f'''// --- Auth Methods ---
-  login(credentials: any): Observable<any> {{
-    return this.http.post<any>(`${{this.apiUrl}}/auth/login`, credentials).pipe(
-      tap(user => this.currentUser.set(user))
-    );
-  }}
-
-  // Redirect-based Google Login
-  loginWithGoogle(): void {{
-    window.location.href = `${{this.apiUrl}}/auth/google`;
-  }}
-
-  checkStatus(): Observable<any> {{
-    return this.http.get<any>(`${{this.apiUrl}}/auth/user`).pipe(
-      tap({{
-        next: user => this.currentUser.set(user),
-        error: () => this.currentUser.set(null)
-      }})
-    );
-  }}
-
-  logout(): void {{
-    localStorage.removeItem('auth_token');
-    this.currentUser.set(null);
-  }}''' if auth_choice != "None" else "" }
+  {auth_methods}
 }}
 """
 
