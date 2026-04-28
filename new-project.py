@@ -328,7 +328,7 @@ app.use((req, res, next) => {{
   const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
   const currentOrigin = `${{protocol}}://${{host}}`;
   
-  const ancestors = ["'self'", "https://*.vercel.app", "https://carter-portfolio.fyi", "https://www.carter-portfolio.fyi", currentOrigin];
+  const ancestors = ["'self'", "https://*.vercel.app", "https://carter-portfolio.fyi", currentOrigin];
   
   res.setHeader('Content-Security-Policy', `frame-ancestors ${{ancestors.join(' ')}}`);
   res.setHeader('X-Frame-Options', 'ALLOWALL'); 
@@ -812,7 +812,7 @@ export class ApiService {{
   private get apiUrl(): string {{
     const isProd = ('__PRODUCTION__' as string) === 'true';
     if (isProd) {{
-      return { "'/_/backend'" if be_hosting == "vercel" else "'/api'" };
+      return '/api';
     }}
     return '/api';
   }}
@@ -879,7 +879,7 @@ else if (task === 'postbuild') normalizeOutput();
             },
             "backend": {
                 "entrypoint": "backend",
-                "routePrefix": "/_/backend"
+                "routePrefix": "/api"
             }
         },
         "headers": [
@@ -892,7 +892,7 @@ else if (task === 'postbuild') normalizeOutput();
                     },
                     {
                         "key": "Content-Security-Policy",
-                        "value": "frame-ancestors 'self' https://*.vercel.app https://carter-portfolio.fyi https://www.carter-portfolio.fyi http://localhost:3000 http://localhost:4200"
+                        "value": "frame-ancestors 'self' https://*.vercel.app https://carter-portfolio.fyi http://localhost:3000 http://localhost:4200"
                     }
                 ]
             }
