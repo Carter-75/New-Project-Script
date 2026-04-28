@@ -317,7 +317,10 @@ const dbCheck = async (req, res, next) => {{
   }}, 100);
 }};
 
-app.use(helmet());
+app.use(helmet({{
+  frameguard: false,
+  contentSecurityPolicy: false
+}}));
 
 app.use(cors({{
   origin: true,
@@ -870,7 +873,22 @@ else if (task === 'postbuild') normalizeOutput();
                 "entrypoint": "backend",
                 "routePrefix": "/api"
             }
-        }
+        },
+        "headers": [
+            {
+                "source": "/(.*)",
+                "headers": [
+                    {
+                        "key": "X-Frame-Options",
+                        "value": "ALLOWALL"
+                    },
+                    {
+                        "key": "Content-Security-Policy",
+                        "value": "frame-ancestors *"
+                    }
+                ]
+            }
+        ]
     }
 
     root_vercel_index = """const app = require('../backend/app');
