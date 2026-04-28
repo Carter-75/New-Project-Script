@@ -879,12 +879,12 @@ else if (task === 'postbuild') normalizeOutput();
                 "source": "/(.*)",
                 "headers": [
                     {
-                        "key": "X-Frame-Options",
-                        "value": "ALLOWALL"
-                    },
-                    {
                         "key": "Content-Security-Policy",
                         "value": "frame-ancestors *"
+                    },
+                    {
+                        "key": "Cross-Origin-Resource-Policy",
+                        "value": "cross-origin"
                     }
                 ]
             }
@@ -1281,6 +1281,17 @@ export class HomeComponent implements OnInit {{
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+  <script>
+    (function() {{
+      console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Client script active.');
+      if (window.parent !== window) {{
+        console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Embedded in iframe. Sending handshake...');
+        window.parent.postMessage({{ type: 'CHECK_IN', project: {PROJECT_NAME_VAR} }}, '*');
+      }} else {{
+        console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Running standalone.');
+      }}
+    }})();
+  </script>
   { '<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.1/css/bulma.min.css">' if css_choice == 'bulma' else '' }
 </head>
 <body class="bg-slate-50">
