@@ -104,6 +104,24 @@ def main():
         options=["yes", "no"]
     ) == "yes"
 
+    use_gsap = ask_input(
+        "Do you want GSAP (Animations)?", 
+        default="yes", 
+        options=["yes", "no"]
+    ) == "yes"
+
+    use_three = ask_input(
+        "Do you want Three.js (3D)?", 
+        default="yes", 
+        options=["yes", "no"]
+    ) == "yes"
+
+    use_lenis = ask_input(
+        "Do you want Lenis (Smooth Scroll)?", 
+        default="yes", 
+        options=["yes", "no"]
+    ) == "yes"
+
     ai_choice = ask_input(
         "Which AI tools do you want to configure?", 
         default="Agents.md", 
@@ -614,6 +632,17 @@ module.exports = router;
         fe_deps.update({"canvas-confetti": "^1.9.3"})
         fe_dev_deps.update({"@types/canvas-confetti": "^1.6.4"})
 
+    if use_gsap:
+        fe_deps.update({"gsap": "^3.15.0"})
+
+    if use_three:
+        fe_deps.update({"three": "^0.184.0"})
+        fe_dev_deps.update({"@types/three": "^0.184.0"})
+
+    if use_lenis:
+        fe_deps.update({"@studio-freight/lenis": "^1.0.42"})
+
+
     fe_package_json = {
         "name": f"{project_name.lower()}-frontend",
         "version": "0.0.0",
@@ -1102,6 +1131,12 @@ npm run dev
     if use_matter: physics_imports += "import * as Matter from 'matter-js';\n"
     if use_anime: physics_imports += "import anime from 'animejs';\n"
     if use_confetti: physics_imports += "import confetti from 'canvas-confetti';\n"
+    if use_gsap: physics_imports += "import gsap from 'gsap';\nimport { ScrollTrigger } from 'gsap/ScrollTrigger';\n"
+    if use_three: physics_imports += "import * as THREE from 'three';\n"
+    if use_lenis: physics_imports += "import Lenis from '@studio-freight/lenis';\n"
+
+    if use_gsap: physics_imports += "\ngsap.registerPlugin(ScrollTrigger);\n"
+
 
     physics_variables = ""
     if use_matter:
@@ -1110,6 +1145,10 @@ npm run dev
     physics_init_calls = ""
     if use_matter: physics_init_calls += "      this.initPhysics();\n"
     if use_anime: physics_init_calls += "      this.initAnimation();\n"
+    if use_gsap: physics_init_calls += "      this.initGSAP();\n"
+    if use_three: physics_init_calls += "      this.initThreeJS();\n"
+    if use_lenis: physics_init_calls += "      this.initLenis();\n"
+
 
     physics_logic = ""
     if use_matter or use_anime or use_confetti:
@@ -1117,19 +1156,22 @@ npm run dev
   private container = viewChild<ElementRef<HTMLDivElement>>('scene');
   private card = viewChild<ElementRef<HTMLDivElement>>('card');
 {physics_variables}
+  private lenis?: Lenis;
+
   constructor() {{
     afterNextRender(() => {{
 {physics_init_calls}
-      if ({'true' if use_matter else 'false'}) window.addEventListener('resize', this.handleResize);
+      if ({'true' if use_matter or use_three else 'false'}) window.addEventListener('resize', this.handleResize);
     }});
   }}
 
   ngOnDestroy() {{
-    if ({'true' if use_matter else 'false'}) window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('resize', this.handleResize);
     {"if (this.render) { Matter.Render.stop(this.render); if (this.render.canvas.parentNode) { this.render.canvas.parentNode.removeChild(this.render.canvas); } }" if use_matter else ""}
     {"if (this.engine) Matter.Engine.clear(this.engine);" if use_matter else ""}
+    { "if (this.lenis) this.lenis.destroy();" if use_lenis else "" }
+    { "ScrollTrigger.getAll().forEach(t => t.kill());" if use_gsap else "" }
   }}
-
 
   private handleResize = () => {{
     const el = this.container()?.nativeElement;
@@ -1137,6 +1179,7 @@ npm run dev
       {( 'this.render.canvas.width = el.clientWidth; this.render.options.width = el.clientWidth;' if use_matter else '')}
     }}
   }};
+
 """
     else:
         physics_logic = ""
@@ -1154,6 +1197,66 @@ npm run dev
         loop: true
       });
     }
+  }
+"""
+    if use_gsap:
+        physics_logic += """
+  private initGSAP() {
+    gsap.from(".glass", {
+      y: 100,
+      opacity: 0,
+      duration: 1.2,
+      ease: "power4.out",
+      stagger: 0.2,
+      scrollTrigger: {
+        trigger: ".glass",
+        start: "top 90%"
+      }
+    });
+  }
+"""
+    if use_lenis:
+        physics_logic += """
+  private initLenis() {
+    this.lenis = new Lenis({
+      duration: 1.2,
+      easing: (t) => Math.min(1, 1.001 - Math.pow(2, -10 * t)),
+    });
+
+    const raf = (time: number) => {
+      this.lenis?.raf(time);
+      requestAnimationFrame(raf);
+    };
+    requestAnimationFrame(raf);
+  }
+"""
+    if use_three:
+        physics_logic += """
+  private initThreeJS() {
+    const el = this.container()?.nativeElement;
+    if (!el) return;
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, el.clientWidth / 220, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+    
+    renderer.setSize(el.clientWidth, 220);
+    el.appendChild(renderer.domElement);
+
+    const geometry = new THREE.TorusKnotGeometry(10, 3, 100, 16);
+    const material = new THREE.MeshNormalMaterial();
+    const torusKnot = new THREE.Mesh(geometry, material);
+    scene.add(torusKnot);
+
+    camera.position.z = 30;
+
+    const animate = () => {
+      requestAnimationFrame(animate);
+      torusKnot.rotation.x += 0.01;
+      torusKnot.rotation.y += 0.01;
+      renderer.render(scene, camera);
+    };
+    animate();
   }
 """
     if use_matter:
