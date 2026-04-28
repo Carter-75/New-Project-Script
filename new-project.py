@@ -872,17 +872,35 @@ else if (task === 'postbuild') normalizeOutput();
 """
 
     root_vercel_json = {
-        "experimentalServices": {
-            "frontend": {
-                "entrypoint": "frontend",
-                "routePrefix": "/",
-                "framework": "angular"
-            },
-            "backend": {
-                "entrypoint": "backend",
-                "routePrefix": "/_/backend"
+        "version": 2,
+        "buildCommand": "npm run build",
+        "outputDirectory": "frontend/dist/frontend",
+        "framework": "angular",
+        "headers": [
+            {
+                "source": "/(.*)",
+                "headers": [
+                    {
+                        "key": "X-Frame-Options",
+                        "value": "ALLOWALL"
+                    },
+                    {
+                        "key": "Content-Security-Policy",
+                        "value": "frame-ancestors 'self' https://*.vercel.app https://carter-portfolio.fyi https://www.carter-portfolio.fyi http://localhost:3000 http://localhost:4200"
+                    }
+                ]
             }
-        }
+        ],
+        "rewrites": [
+            {
+                "source": "/api/(.*)",
+                "destination": "/api/index.js"
+            },
+            {
+                "source": "/(.*)",
+                "destination": "/index.html"
+            }
+        ]
     }
 
     root_vercel_index = """const app = require('../backend/app');
