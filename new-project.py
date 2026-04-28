@@ -250,12 +250,6 @@ if (isProd) {{
   app.set('trust proxy', 1);
 }}
 
-// Frame Ancestors for Iframe Security
-const frameAncestors = ["'self'", "https://carter-portfolio.fyi", "https://carter-portfolio.vercel.app", "https://*.vercel.app", `http://localhost:${{process.env.PORT || '{be_port}'}}`];
-
-if (prodUrl) frameAncestors.push(prodUrl);
-if (process.env.PROD_BACKEND_URL) frameAncestors.push(process.env.PROD_BACKEND_URL);
-
 // --- Models & Passport Config ---
 {passport_config_require}
 
@@ -324,16 +318,20 @@ const dbCheck = async (req, res, next) => {{
 }};
 
 app.use(helmet({{
-  contentSecurityPolicy: {{
-    directives: {{
-      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
-      "frame-ancestors": frameAncestors,
-    }},
-  }},
+  contentSecurityPolicy: false,
+  frameguard: false
 }}));
 
 app.use((req, res, next) => {{
-  res.setHeader('X-Frame-Options', 'ALLOWALL');
+  // Dynamically calculate frame ancestors to support various Vercel aliases
+  const host = req.get('host');
+  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
+  const currentOrigin = `${{protocol}}://${{host}}`;
+  
+  const ancestors = ["'self'", "https://*.vercel.app", "https://carter-portfolio.fyi", "https://www.carter-portfolio.fyi", currentOrigin];
+  
+  res.setHeader('Content-Security-Policy', `frame-ancestors ${{ancestors.join(' ')}}`);
+  res.setHeader('X-Frame-Options', 'ALLOWALL'); 
   next();
 }});
 
@@ -873,9 +871,17 @@ else if (task === 'postbuild') normalizeOutput();
 
     root_vercel_json = {
         "version": 2,
-        "buildCommand": "npm run build",
-        "outputDirectory": "frontend/dist/frontend",
-        "framework": "angular",
+        "experimentalServices": {
+            "frontend": {
+                "entrypoint": "frontend",
+                "routePrefix": "/",
+                "framework": "angular"
+            },
+            "backend": {
+                "entrypoint": "backend",
+                "routePrefix": "/_/backend"
+            }
+        },
         "headers": [
             {
                 "source": "/(.*)",
@@ -889,16 +895,6 @@ else if (task === 'postbuild') normalizeOutput();
                         "value": "frame-ancestors 'self' https://*.vercel.app https://carter-portfolio.fyi https://www.carter-portfolio.fyi http://localhost:3000 http://localhost:4200"
                     }
                 ]
-            }
-        ],
-        "rewrites": [
-            {
-                "source": "/api/(.*)",
-                "destination": "/api/index.js"
-            },
-            {
-                "source": "/(.*)",
-                "destination": "/index.html"
             }
         ]
     }
