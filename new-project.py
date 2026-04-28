@@ -317,23 +317,12 @@ const dbCheck = async (req, res, next) => {{
   }}, 100);
 }};
 
-app.use(helmet({{
-  contentSecurityPolicy: false,
-  frameguard: false
-}}));
+app.use(helmet());
 
-app.use((req, res, next) => {{
-  // Dynamically calculate frame ancestors to support various Vercel aliases
-  const host = req.get('host');
-  const protocol = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-  const currentOrigin = `${{protocol}}://${{host}}`;
-  
-  const ancestors = ["'self'", "https://*.vercel.app", "https://carter-portfolio.fyi", currentOrigin];
-  
-  res.setHeader('Content-Security-Policy', `frame-ancestors ${{ancestors.join(' ')}}`);
-  res.setHeader('X-Frame-Options', 'ALLOWALL'); 
-  next();
-}});
+app.use(cors({{
+  origin: true,
+  credentials: true
+}}));
 
 // Apply DB check to all /api routes
 app.use('/api', dbCheck);
@@ -881,22 +870,7 @@ else if (task === 'postbuild') normalizeOutput();
                 "entrypoint": "backend",
                 "routePrefix": "/api"
             }
-        },
-        "headers": [
-            {
-                "source": "/(.*)",
-                "headers": [
-                    {
-                        "key": "X-Frame-Options",
-                        "value": "ALLOWALL"
-                    },
-                    {
-                        "key": "Content-Security-Policy",
-                        "value": "frame-ancestors 'self' https://*.vercel.app https://carter-portfolio.fyi http://localhost:3000 http://localhost:4200"
-                    }
-                ]
-            }
-        ]
+        }
     }
 
     root_vercel_index = """const app = require('../backend/app');
