@@ -61,7 +61,6 @@ def main():
         "Project Name", 
         validation_func=lambda x: (
             len(x) <= 100 and 
-            x.islower() and 
             all(c.isalnum() or c in '._-' for c in x) and 
             '---' not in x
         )
@@ -1386,12 +1385,12 @@ export class HomeComponent implements OnInit {{
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
   <script>
     (function() {{
-      console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Client script active.');
+      console.log('🚀 [' + '{project_slug}' + '] Client script active.');
       if (window.parent !== window) {{
-        console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Embedded in iframe. Sending handshake...');
-        window.parent.postMessage({{ type: 'CHECK_IN', project: {PROJECT_NAME_VAR} }}, '*');
+        console.log('🚀 [' + '{project_slug}' + '] Embedded in iframe. Sending handshake...');
+        window.parent.postMessage({{ type: 'CHECK_IN', project: '{project_slug}' }}, '*');
       }} else {{
-        console.log('🚀 [' + {PROJECT_NAME_VAR} + '] Running standalone.');
+        console.log('🚀 [' + '{project_slug}' + '] Running standalone.');
       }}
     }})();
   </script>
@@ -1610,10 +1609,10 @@ export class DashboardComponent implements OnInit {{
     (services_dir / "api.service.ts").write_text(fe_api_service_ts, encoding='utf-8')
 
     # --- Env File (Root Only) ---
-    env_content = f"""PROJECT_NAME={project_name}
+    env_content = f"""PROJECT_NAME={project_slug}
 PORT={be_port}
 FRONTEND_PORT={fe_port}
-MONGODB_URI=mongodb://localhost:27017/{project_name}
+MONGODB_URI=mongodb://localhost:27017/{project_slug}
 
 # --- Production Configuration ---
 PRODUCTION=false
@@ -1814,8 +1813,8 @@ Decoupled MEAN Stack (Angular {fe_port} / Express {be_port}).
             
             env_file.write_text(merged_content, encoding='utf-8')
 
-            # 1. Link the project
-            subprocess.run(["vercel", "link", "--yes"], cwd=project_root, check=True, shell=True)
+            # 1. Link the project (using slug to avoid capitalization errors)
+            subprocess.run(["vercel", "link", "--yes", "--project", project_slug], cwd=project_root, check=True, shell=True)
             
             # 2. Sync variables
             vars_added = 0
